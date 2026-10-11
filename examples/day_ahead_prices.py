@@ -1,0 +1,41 @@
+"""Fetch a date, reload stored objects, analyse them, and save a price chart."""
+
+import argparse
+from datetime import date, datetime, timedelta
+from decimal import Decimal
+from zoneinfo import ZoneInfo
+
+from home_energy.charts import save_png
+from home_energy.prices import DayAheadPriceRepository
+from home_energy.prices.analysis import analyse_prices
+from home_energy.prices.chart import create_price_chart
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("date", nargs="?", type=date.fromisoformat,
+                        default=datetime.now(ZoneInfo("Europe/Brussels")).date() + timedelta(days=1))
+    parser.add_argument("--db-only", action="store_true")
+    parser.add_argument("--output", default="outputs/day_ahead_prices.png")
+    parser.add_argument("--threshold", type=Decimal, default=Decimal("300"))
+    args = parser.parse_args()
+    repository = DayAheadPriceRepository()
+    if not args.db_only:
+        repository.fill(args.date)
+    day = repository.load_day(args.date)
+    if day is None:
+        raise SystemExit(f"No stored prices for {args.date}.")
+    analysis = analyse_prices(day, threshold=args.threshold)
+    zone = ZoneInfo(day.timezone)
+    for expensive in analysis.high_price_ranges:
+        print(f"High price: {expensive.start_at.astimezone(zone):%H:%M %z} – "
+              f"{expensive.end_at.astimezone(zone):%H:%M %z}")
+    figure = create_price_chart(day, threshold=args.threshold)
+    try:
+        print(save_png(figure, args.output))
+    finally:
+        figure.clear()
+
+
+if __name__ == "__main__":
+    main()

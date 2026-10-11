@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.py[cod]
+.env
+.env.*
+!.env.example
+.cache/
+*.local.json
+.fusionsolar-session-*
+response*.json
+response*.csv
+outputs/
+dist/
+*.egg-info/
