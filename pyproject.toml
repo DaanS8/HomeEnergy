@@ -1,6 +1,6 @@
 [project]
 name = "home-energy"
-version = "0.1.0"
+version = "0.2.0"
 description = "Electricity usage, day-ahead market prices, and home energy analysis"
 readme = "README.md"
 requires-python = ">=3.10"
