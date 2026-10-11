@@ -25,9 +25,10 @@ if ($LASTEXITCODE -ne 0) { throw 'Published image inspection failed.' }
 $releaseDir = Join-Path $projectRoot "dist/home-energy-$Version"
 if (Test-Path -LiteralPath $releaseDir -PathType Container) {
     [IO.File]::WriteAllText((Join-Path $releaseDir 'registry.json'), ($published -join "`n"))
-    $checksums = Get-ChildItem -LiteralPath $releaseDir -File | Where-Object { $_.Name -ne 'SHA256SUMS' } | ForEach-Object {
+    $checksums = Get-ChildItem -LiteralPath $releaseDir -File -Recurse | Where-Object { $_.Name -ne 'SHA256SUMS' } | Sort-Object FullName | ForEach-Object {
         $hash = Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256
-        "$($hash.Hash.ToLower())  $($_.Name)"
+        $relativePath = $_.FullName.Substring($releaseDir.Length + 1).Replace('\', '/')
+        "$($hash.Hash.ToLower())  $relativePath"
     }
     [IO.File]::WriteAllLines((Join-Path $releaseDir 'SHA256SUMS'), $checksums)
 }

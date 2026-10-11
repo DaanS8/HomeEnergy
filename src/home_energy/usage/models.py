@@ -6,6 +6,33 @@ from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 
+@dataclass(frozen=True)
+class UsageInterval:
+    start_at: datetime
+    end_at: datetime
+    power_kw: Decimal | None
+    ev_power_kw: Decimal | None
+
+
+@dataclass(frozen=True)
+class EVBlock:
+    start_at: datetime
+    end_at: datetime
+    power_kw: Decimal
+    energy_kwh: Decimal
+
+
+@dataclass(frozen=True)
+class DailyUsage:
+    day: date
+    fetched_at: datetime
+    complete: bool
+    total_kwh: Decimal | None
+    ev_total_kwh: Decimal
+    consumption: tuple[UsageInterval, ...]
+    ev_blocks: tuple[EVBlock, ...]
+
+
 @dataclass
 class MeasurementSample:
     sample_index: int

@@ -48,6 +48,19 @@ def main(argv=None) -> int:
     chart.add_argument("date", type=date.fromisoformat)
     chart.add_argument("--output", required=True, type=Path, help="PNG output path")
     chart.add_argument("--threshold", type=_threshold, default=Decimal("300"), help="Actual price threshold in EUR/MWh")
+    investigate = commands.add_parser("investigate", help="Export consumption-only EV hypotheses and graphs")
+    investigate.add_argument("domain", choices=("ev",))
+    investigate.add_argument("date", type=date.fromisoformat)
+    investigate.add_argument("--end-date", type=date.fromisoformat, required=True)
+    investigate.add_argument("--output", type=Path, default=Path("outputs/ev-investigation"))
+    investigate.add_argument("--fetch", action="store_true", help="Fill missing days and cache next-day context")
+    investigate.add_argument("--consumption-unit", choices=("kW", "W"), default="kW",
+                             help="Declare the power unit when source metadata is absent")
+    investigate.add_argument("--threshold-kw", type=float, default=2.13,
+                             help="Reference threshold for selecting calibration candidates (default: 2.13 kW)")
+    investigate.add_argument("--minimum-minutes", type=float, default=120)
+    investigate.add_argument("--block-quantile", type=float, default=0.1)
+    investigate.add_argument("--baseline-quantile", type=float, default=0.1)
     args = parser.parse_args(argv)
     try:
         if args.command == "init-db":
@@ -59,6 +72,16 @@ def main(argv=None) -> int:
                 args.date, args.end_date,
                 on_result=lambda r: print(f"{r.day}: {'stored' if r.inserted else 'already stored; skipped'}"),
             )
+        elif args.command == "investigate":
+            from .investigations.ev.analysis import EVDetectionConfig
+            from .investigations.ev.report import run_investigation
+
+            config = EVDetectionConfig(
+                threshold_kw=args.threshold_kw, minimum_minutes=args.minimum_minutes,
+                block_quantile=args.block_quantile, baseline_quantile=args.baseline_quantile,
+            )
+            run_investigation(args.date, args.end_date, args.output, fetch=args.fetch,
+                              config=config, unit=args.consumption_unit)
         else:
             from .charts import save_png
             from .prices.chart import create_price_chart

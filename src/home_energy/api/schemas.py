@@ -1,7 +1,7 @@
 """Explicit public request, response, and error schemas."""
 
 import re
-from datetime import date as CalendarDate
+from datetime import date as CalendarDate, datetime, timezone
 from decimal import Decimal
 from typing import Literal
 
@@ -9,6 +9,8 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validato
 
 from ..prices.analysis import DEFAULT_THRESHOLD
 from ..prices.repository import validate_price_range
+from ..usage.daily import validate_daily_date
+from ..usage.ev import EV_POWER_KW, MINIMUM_EV_DURATION, MODEL_VERSION
 
 
 class DayAheadReportRequest(BaseModel):
@@ -75,3 +77,57 @@ class ErrorResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: Literal["ok"] = "ok"
+
+
+class DailyUsageRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    date: CalendarDate | None = Field(default=None, description="YYYY-MM-DD in Europe/Brussels, today or past. Omit for today.")
+
+    @field_validator("date", mode="before")
+    @classmethod
+    def iso_date(cls, value):
+        if value is not None and (not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value)):
+            raise ValueError("Use a calendar date YYYY-MM-DD.")
+        return value
+
+    @field_validator("date")
+    @classmethod
+    def allowed_date(cls, value):
+        if value is not None:
+            validate_daily_date(value, datetime.now(timezone.utc))
+        return value
+
+
+class ConsumptionIntervalResponse(BaseModel):
+    start_at: AwareDatetime
+    end_at: AwareDatetime = Field(description="Exclusive end; five-minute interval.")
+    power_kw: str | None = Field(description="Total consumption in kW; exact Decimal string. Null means missing.")
+    ev_power_kw: str | None = Field(description="Estimated EV kW: 0 off, calibrated power on, null missing or pending qualification.")
+
+
+class EVBlockResponse(BaseModel):
+    start_at: AwareDatetime = Field(description="Inclusive start clipped to the requested day.")
+    end_at: AwareDatetime = Field(description="Exclusive end clipped to the requested day.")
+    power_kw: str
+    energy_kwh: str
+
+
+class EVModelResponse(BaseModel):
+    version: str = MODEL_VERSION
+    power_kw: str = str(EV_POWER_KW)
+    minimum_minutes: int = int(MINIMUM_EV_DURATION.total_seconds() / 60)
+    method: Literal["mean_clean_stop_drop"] = "mean_clean_stop_drop"
+
+
+class DailyUsageResponse(BaseModel):
+    date: CalendarDate
+    timezone: Literal["Europe/Brussels"] = "Europe/Brussels"
+    status: Literal["complete", "provisional"] = Field(description="Complete requires consumption, total, and both two-hour boundary windows. Today is provisional.")
+    fetched_at: AwareDatetime = Field(description="Timestamp of the requested day's FusionSolar snapshot.")
+    total_kwh: str | None = Field(description="FusionSolar totalUsePower in kWh; today is an evolving total. Null means unavailable.")
+    total_kwh_source: Literal["fusionsolar.totalUsePower"] = "fusionsolar.totalUsePower"
+    ev_total_kwh: str = Field(description="Energy of the confirmed EV blocks within this day, in kWh.")
+    ev_model: EVModelResponse = Field(default_factory=EVModelResponse)
+    consumption: list[ConsumptionIntervalResponse]
+    ev_blocks: list[EVBlockResponse]

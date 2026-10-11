@@ -13,6 +13,9 @@ from ..filling import FillError
 from ..prices.entsoe import (InvalidPriceDataError, PriceAPIError, PriceConfigurationError,
                              PricesUnavailableError)
 from ..prices.report import ReportRequestError
+from ..usage.daily import DailyUsageRequestError, UsageConfigurationError
+from ..usage.energy_balance import EnergyBalanceValidationError
+from ..usage.fusionsolar import FusionSolarError
 from .schemas import ErrorResponse
 
 
@@ -22,10 +25,10 @@ logger = logging.getLogger("uvicorn.error")
 def error_response(exc: Exception) -> JSONResponse:
     while isinstance(exc, FillError):
         exc = exc.cause
-    if isinstance(exc, (RequestValidationError, ReportRequestError)):
+    if isinstance(exc, (RequestValidationError, ReportRequestError, DailyUsageRequestError)):
         status, code, retryable = 422, "invalid_request", False
-        message = "Invalid request. Use a date YYYY-MM-DD no later than tomorrow and a finite threshold."
-    elif isinstance(exc, (DatabaseConfigurationError, PriceConfigurationError)):
+        message = "Invalid request. Check the endpoint's date limits and request fields."
+    elif isinstance(exc, (DatabaseConfigurationError, PriceConfigurationError, UsageConfigurationError)):
         status, code, retryable = 500, "configuration_error", False
         message = "Home Energy configuration is invalid. Check server settings."
     elif isinstance(exc, PricesUnavailableError):
@@ -37,6 +40,12 @@ def error_response(exc: Exception) -> JSONResponse:
     elif isinstance(exc, PriceAPIError):
         status, code, retryable = 502, "provider_unavailable", True
         message = "The price provider request failed. Retry later."
+    elif isinstance(exc, EnergyBalanceValidationError):
+        status, code, retryable = 502, "invalid_provider_data", False
+        message = "FusionSolar returned invalid consumption data."
+    elif isinstance(exc, FusionSolarError):
+        status, code, retryable = 502, "provider_unavailable", True
+        message = "The FusionSolar request failed. Check authentication or retry later."
     elif isinstance(exc, psycopg.Error):
         status, code, retryable = 503, "database_unavailable", True
         message = "The database is unavailable or its schema is not usable."
@@ -60,5 +69,6 @@ def register_error_handlers(app: FastAPI) -> None:
         return error_response(exc)
 
     for error_type in (RequestValidationError, ReportRequestError, FillError, PriceAPIError,
-                       PriceConfigurationError, DatabaseConfigurationError, psycopg.Error, HTTPException):
+                       PriceConfigurationError, DatabaseConfigurationError, psycopg.Error, HTTPException,
+                       DailyUsageRequestError, UsageConfigurationError, EnergyBalanceValidationError, FusionSolarError):
         app.add_exception_handler(error_type, handler)

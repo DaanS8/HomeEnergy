@@ -21,15 +21,17 @@ try {
     Invoke-Docker -Arguments (@('save', '-o', (Join-Path $releaseDir 'images.tar')) + $imageNames)
     $stackYaml = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'compose.portainer.yaml')).Replace('home-energy:0.1.0', "home-energy:$Version")
     [IO.File]::WriteAllText((Join-Path $releaseDir 'compose.portainer.yaml'), $stackYaml)
-    Copy-Item -LiteralPath (Join-Path $projectRoot 'docs/deployment.md') -Destination $releaseDir
+    Copy-Item -LiteralPath (Join-Path $projectRoot 'README.md') -Destination $releaseDir
+    Copy-Item -LiteralPath (Join-Path $projectRoot 'docs') -Destination $releaseDir -Recurse
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'n8n-day-ahead.json') -Destination $releaseDir
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'publish-image.ps1') -Destination $releaseDir
     $images = & docker image inspect @imageNames
     if ($LASTEXITCODE -ne 0) { throw 'Image inspection failed.' }
     [IO.File]::WriteAllText((Join-Path $releaseDir 'images.json'), ($images -join "`n"))
-    $checksums = Get-ChildItem -LiteralPath $releaseDir -File | ForEach-Object {
+    $checksums = Get-ChildItem -LiteralPath $releaseDir -File -Recurse | Sort-Object FullName | ForEach-Object {
         $hash = Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256
-        "$($hash.Hash.ToLower())  $($_.Name)"
+        $relativePath = $_.FullName.Substring($releaseDir.Length + 1).Replace('\', '/')
+        "$($hash.Hash.ToLower())  $relativePath"
     }
     [IO.File]::WriteAllLines((Join-Path $releaseDir 'SHA256SUMS'), $checksums)
     Write-Output "Release: $releaseDir"
