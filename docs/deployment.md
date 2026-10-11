@@ -22,25 +22,15 @@ CREATE DATABASE home_energy;
 
 The connected role becomes the owner. Set `PGUSER` in the app to that same role and use its existing password. If `home_energy` already exists, inspect it and reuse it rather than replacing it. The API creates its own `home_energy` schema/tables on startup; it does not import data from the development database.
 
-## 2. Configure GitHub Container Registry in Portainer
+## 2. Use the public GitHub Container Registry image
 
-The release image is `ghcr.io/daans8/home-energy:0.1.0`. It was published and successfully pulled on 11 October 2026; GitHub confirmed the package is private. The publishing script does not change visibility. The image includes a source label pointing to [TrackingPowerUsage](https://github.com/DaanS8/TrackingPowerUsage).
+The release image is `ghcr.io/daans8/home-energy:0.1.0`. It was published on 11 October 2026 and is now public: anonymous access to the registry manifest was verified. The publishing script does not change visibility. The image includes a source label pointing to [TrackingPowerUsage](https://github.com/DaanS8/TrackingPowerUsage).
 
 Published package: [Home Energy on GHCR](https://github.com/users/DaanS8/packages/container/package/home-energy). Verified digest: `sha256:37cefa68e04b9426fecb54ad169f73057db9edf8930ecc8a9cb7d077389e0d44`.
 
-For a private package, create a GitHub **personal access token (classic)** with `read:packages` access to this package. In Portainer, open **Registries → Add registry → Custom registry**, then enter:
+No custom registry login or GitHub token is needed in Portainer to download this public image. The stack specifies its full GHCR address, so Docker can pull it directly. No image archive upload is needed either. [GHCR documentation](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry).
 
-| Setting | Value |
-| --- | --- |
-| Name | `GitHub Container Registry` |
-| Registry URL | `ghcr.io` |
-| Authentication | Enabled |
-| Username | `DaanS8` |
-| Password | Your GitHub classic token, not your GitHub account password |
-
-Save the registry and make it available to the TrueNAS Docker environment if Portainer asks. [Portainer custom registry documentation](https://docs.portainer.io/admin/registries/add/custom), [GHCR authentication documentation](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry).
-
-For local publishing, authenticate with `docker login ghcr.io -u DaanS8` using a classic token with `write:packages`. Keep tokens in Docker/Portainer credential storage; they are not app environment variables. No image archive upload is needed when deploying from GHCR.
+For publishing future releases from your workstation, `docker login ghcr.io -u DaanS8` still requires a classic token with `write:packages`. Publishing credentials are not app environment variables.
 
 ### Optional offline package
 
@@ -80,7 +70,7 @@ Under **Environment variables**, add the following values. Enter credential valu
 
 `PGDATABASE=home_energy` is already set in the stack. The stack uses the NAS IP and published PostgreSQL port, so the containers do not need to share a Docker network. Do not use `localhost` for `PGHOST`: inside the app, that means the app container itself.
 
-Select the configured GHCR registry if Portainer asks which registry credentials to use, then click **Deploy the stack**. The app uses `pull_policy: if_not_present`, so Docker downloads the versioned image from GHCR when it is not already present. For offline deployment, leave **Re-pull image/Pull latest image** off.
+Click **Deploy the stack**. The app uses `pull_policy: if_not_present`, so Docker downloads the versioned image from GHCR when it is not already present. No registry credentials are required for this public package. For offline deployment, leave **Re-pull image/Pull latest image** off.
 
 The image runs as UID/GID 10001, has a readiness health check, restarts automatically, and limits container logs. Its optional cache/output directories use Docker named volumes. API reports are generated in memory and returned in the response. The important persistent data belongs to the existing PostgreSQL deployment, so preserve and back up its storage. No host bind mounts are required for HomeEnergy.
 
@@ -137,18 +127,20 @@ With the full response enabled, the API report is under `body`; the HTTP status 
 
 The workflow:
 
-1. Runs manually or daily at **16:00 Europe/Brussels**.
+1. Runs manually or daily at **19:00 Europe/Brussels**, matching the original Daily Energy Price Monitoring workflow.
 2. Keeps the requested date fixed through retries.
 3. Calls the report API. HTTP 200 with `success` or `warning` follows the completed-report path.
-4. Retries errors with `retryable: true` after ten minutes, up to six total attempts. Errors that are not retryable stop immediately. The last failed attempt marks the execution as failed.
-5. Converts `body.image` into a binary PNG in field **chart**, with `body.image_filename` and MIME type `image/png`.
+4. Retries errors with `retryable: true` after ten minutes, up to six total attempts. Non-retryable errors and exhausted retries send **Send admin alert**, then mark the execution as failed.
+5. Converts `body.image` into a binary PNG in field **image_file**, with `body.image_filename` and MIME type `image/png`.
 6. Restores the report metadata in **Report and attachment**, because Convert to File returns binary data without retaining the input JSON.
 
 The daily time is a starting schedule, not a guarantee that prices are published; delayed publication can return `prices_unavailable`. [n8n schedule/timezone documentation](https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-base.scheduletrigger/).
 
-The final node outputs `$json.status`, `$json.warning`, `$json.high_price_ranges`, `$json.date`, and `$binary.chart`. Attach your notification node after it. Select binary field **chart** for the image attachment; use `$json.warning` only when `$json.status === 'warning'`. This workflow does not send notifications until you add and configure that node.
+**Report and attachment** outputs `$json.status`, `$json.warning`, `$json.high_price_ranges`, `$json.date`, and `$binary.image_file`. It feeds the original **Send daily digest** Discord node and **Is Warning** branch. Warning reports also send **Send Warning**, with the same PNG attached. The three Discord nodes retain the original bot credential references, server selection, and role mentions. Digests go to **daily-energy-digest** (`1532856098086850680`), warnings to **home-alerts** (`1532853070852129010`), and errors to **admin** (`1532856135546044607`), matching the final workflow export. The digest date uses the report's requested date, so manual runs and retries keep the caption aligned with the chart.
 
-If rebuilding manually, **Convert to File → Move Base64 String to File** uses Base64 Input Field `body.image`, output field `chart`, filename `{{ $json.body.image_filename }}`, MIME type `image/png`. [n8n Convert to File documentation](https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-base.converttofile/).
+Check that **Discord Bot account** is selected in all three Discord nodes after importing. The workflow references the existing credential; the export contains no bot token. Import into your existing n8n instance to reuse it, or select the corresponding credential if its ID differs. A manual run sends real Discord messages to the configured channels.
+
+If rebuilding manually, **Convert to File → Move Base64 String to File** uses Base64 Input Field `body.image`, output field `image_file`, filename `{{ $json.body.image_filename }}`, MIME type `image/png`. [n8n Convert to File documentation](https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-base.converttofile/).
 
 Save and activate/publish the workflow once the manual run succeeds. Keep its workflow timezone set to **Europe/Brussels**. Use the NAS IP, not `localhost`, in n8n; n8n is a separate container. If your n8n instance blocks private-network HTTP requests, allow the NAS address in that instance's request security settings.
 
@@ -196,6 +188,7 @@ The smoke test uses an isolated PostgreSQL container and disposable Docker volum
 
 - All 101 Python tests passed, including the 19 PostgreSQL integration tests.
 - The packaged `home-energy:0.1.0` image passed the isolated container smoke test, including an actual ENTSO-E fetch for 10 October 2026 and a cached repeat.
-- The workflow imported and executed in a temporary local n8n 2.42.6 container, producing the real API's report metadata and a PNG in binary field `chart`.
+- The packaged release workflow imported and executed in a temporary local n8n 2.42.6 container, producing the real API's report metadata and a PNG in binary field `chart`.
 - n8n branch checks passed for warning reports, success on the third attempt, immediate failure for non-retryable errors, and stopping after six retryable failures. These branch tests shortened the wait interval; the distributed workflow retains ten-minute waits.
+- The updated `deploy/n8n-day-ahead.json` also imported successfully. Separate n8n runs verified success and warning messages with `image_file` attachments, success on the third attempt, immediate admin alerts for non-retryable errors, and admin alerts after six retryable or transport failures. Discord nodes were replaced with local capture nodes during these checks; no Discord messages were sent.
 - NAS deployment and verification remain the manual steps above; no changes have been made to your NAS PostgreSQL or n8n instance.

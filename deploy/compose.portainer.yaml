@@ -1,4 +1,4 @@
-# Configure GHCR credentials and stack variables in Portainer before deployment.
+# Public GHCR image; configure app variables in Portainer before deployment.
 services:
   app:
     image: ghcr.io/daans8/home-energy:0.1.0
