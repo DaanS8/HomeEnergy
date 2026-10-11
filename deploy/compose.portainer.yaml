@@ -1,0 +1,35 @@
+# Configure GHCR credentials and stack variables in Portainer before deployment.
+services:
+  app:
+    image: ghcr.io/daans8/home-energy:0.1.0
+    pull_policy: if_not_present
+    restart: unless-stopped
+    init: true
+    ports:
+      - "${API_BIND_IP:-192.168.0.10}:${API_PORT:-18000}:8000"
+    environment:
+      TZ: Europe/Brussels
+      PGHOST: ${PGHOST:-192.168.0.10}
+      PGPORT: ${PGPORT:-5432}
+      PGDATABASE: home_energy
+      PGUSER: ${PGUSER:?Set your existing PostgreSQL username in Portainer}
+      PGPASSWORD: ${PGPASSWORD:?Set your PostgreSQL password in Portainer}
+      ENTSOE_API_KEY: ${ENTSOE_API_KEY:?Set your ENTSO-E API key in Portainer}
+      FUSIONSOLAR_USERNAME: ${FUSIONSOLAR_USERNAME:-}
+      FUSIONSOLAR_PASSWORD: ${FUSIONSOLAR_PASSWORD:-}
+    volumes:
+      - app_cache:/app/.cache
+      - app_outputs:/app/outputs
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  app_cache:
+  app_outputs:

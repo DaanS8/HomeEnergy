@@ -40,6 +40,8 @@ The response includes a base64 PNG in `image`, a `success` or `warning` status, 
 
 ## Development
 
+For the first TrueNAS deployment with Portainer, an existing PostgreSQL server, and n8n, follow the [deployment guide](docs/deployment.md). Build a release with `powershell -ExecutionPolicy Bypass -File deploy/build-release.ps1`, verify it, then publish to GHCR with `powershell -ExecutionPolicy Bypass -File deploy/publish-image.ps1`. Portainer uses `ghcr.io/daans8/home-energy:0.1.0`; the importable n8n workflow is in `deploy/n8n-day-ahead.json`.
+
 See the [usage](examples/daily_consumption.py) and [price](examples/day_ahead_prices.py) examples, or the [chart style guide](docs/chart-style-guide.md).
 
 ```powershell
