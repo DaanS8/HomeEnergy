@@ -6,8 +6,8 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Request
 
 from .schemas import (DayAheadReportRequest, DayAheadReportResponse, ErrorResponse,
-                      HealthResponse, HighPriceRangeResponse, DailyUsageRequest, DailyUsageResponse,
-                      ConsumptionIntervalResponse, EVBlockResponse)
+                      HealthResponse, HighPriceRangeResponse, DailyUsageRequest,
+                      ConsumptionIntervalResponse, EVBlockResponse, EVUsageReportResponse)
 
 
 router = APIRouter()
@@ -51,28 +51,31 @@ def day_ahead_report(payload: DayAheadReportRequest, request: Request):
     )
 
 
-@router.post("/api/v1/usage/daily", response_model=DailyUsageResponse,
-             operation_id="ingest_daily_usage", tags=["usage"], summary="Ingest consumption and return daily EV blocks",
-             description="Reuse stored past days, fetch missing FusionSolar data, and return consumption and EV blocks. "
-                         "Omit date for today. Today is fetched fresh and never stored as a completed day. "
-                         "EV power is the mean of accepted clean-stop drops, rounded to 0.001 kW. "
-                         "EV regions require total power strictly above calibrated EV power for at least two hours, "
-                         "with two-hour context before and after the day. All times carry Brussels offsets. "
-                         "No baseload is calculated or subtracted. Decimal powers and energies are strings.",
+@router.post("/api/v1/reports/ev/daily", response_model=EVUsageReportResponse,
+             operation_id="prepare_daily_ev_report", tags=["reports"],
+             summary="Prepare a completed daily consumption and EV charging report",
+             description="Return consumption readings, totals, EV blocks, and a base64 PNG of measured total consumption "
+                         "with calibrated EV blocks overlaid. Only dates at least two days ago are accepted; "
+                         "omit date for two days ago in Europe/Brussels. Missing complete days are stored once. "
+                         "Days without detected EV charging still produce an image with zero estimated EV energy. "
+                         "Detection requires total power strictly above calibrated EV power for at least two hours, "
+                         "with two-hour context before and after the day. No baseload is subtracted. "
+                         "Decimal powers and energies are strings; all times carry Brussels offsets.",
              responses={status: {"model": ErrorResponse, "description": description} for status, description in (
-                 (422, "Invalid daily date or request fields."), (502, "FusionSolar request or data failure."),
-                 (503, "Database unavailable."), (500, "Configuration or processing failure."))})
-def daily_usage(payload: DailyUsageRequest, request: Request):
-    report = request.app.state.usage_service(payload.date)
+                 (422, "Invalid date; select a date at least two days ago."),
+                 (502, "FusionSolar request or incomplete consumption data."),
+                 (503, "Database unavailable."), (500, "Configuration or image processing failure."))})
+def daily_ev_report(payload: DailyUsageRequest, request: Request):
+    completed = request.app.state.ev_report_service(payload.date)
+    report = completed.usage
     zone = ZoneInfo("Europe/Brussels")
-    return DailyUsageResponse(
-        date=report.day, status="complete" if report.complete else "provisional", fetched_at=report.fetched_at,
-        total_kwh=str(report.total_kwh) if report.total_kwh is not None else None,
-        ev_total_kwh=str(report.ev_total_kwh),
+    return EVUsageReportResponse(
+        date=report.day, fetched_at=report.fetched_at, total_kwh=str(report.total_kwh),
+        ev_total_kwh=str(report.ev_total_kwh), image=base64.b64encode(completed.png).decode("ascii"),
+        image_filename=f"ev-usage-{report.day}.png",
         consumption=[ConsumptionIntervalResponse(
             start_at=s.start_at.astimezone(zone), end_at=s.end_at.astimezone(zone),
-            power_kw=str(s.power_kw) if s.power_kw is not None else None,
-            ev_power_kw=str(s.ev_power_kw) if s.ev_power_kw is not None else None,
+            power_kw=str(s.power_kw), ev_power_kw=str(s.ev_power_kw),
         ) for s in report.consumption],
         ev_blocks=[EVBlockResponse(start_at=b.start_at.astimezone(zone), end_at=b.end_at.astimezone(zone),
                                   power_kw=str(b.power_kw), energy_kwh=str(b.energy_kwh))

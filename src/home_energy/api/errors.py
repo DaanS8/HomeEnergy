@@ -13,7 +13,8 @@ from ..filling import FillError
 from ..prices.entsoe import (InvalidPriceDataError, PriceAPIError, PriceConfigurationError,
                              PricesUnavailableError)
 from ..prices.report import ReportRequestError
-from ..usage.daily import DailyUsageRequestError, UsageConfigurationError
+from ..usage.daily import DailyUsageRequestError
+from ..usage.ingestion import UsageConfigurationError
 from ..usage.energy_balance import EnergyBalanceValidationError
 from ..usage.fusionsolar import FusionSolarError
 from .schemas import ErrorResponse

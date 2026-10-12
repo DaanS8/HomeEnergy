@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 from home_energy.charts import save_png
 from home_energy.prices import DayAheadPriceRepository
+from home_energy.prices.ingestion import DayAheadPriceIngestionService
 from home_energy.prices.analysis import analyse_prices
 from home_energy.prices.chart import create_price_chart
 
@@ -21,7 +22,7 @@ def main():
     args = parser.parse_args()
     repository = DayAheadPriceRepository()
     if not args.db_only:
-        repository.fill(args.date)
+        DayAheadPriceIngestionService(repository).fill(args.date)
     day = repository.load_day(args.date)
     if day is None:
         raise SystemExit(f"No stored prices for {args.date}.")

@@ -10,8 +10,8 @@ from zoneinfo import ZoneInfo
 class UsageInterval:
     start_at: datetime
     end_at: datetime
-    power_kw: Decimal | None
-    ev_power_kw: Decimal | None
+    power_kw: Decimal
+    ev_power_kw: Decimal
 
 
 @dataclass(frozen=True)
@@ -26,8 +26,7 @@ class EVBlock:
 class DailyUsage:
     day: date
     fetched_at: datetime
-    complete: bool
-    total_kwh: Decimal | None
+    total_kwh: Decimal
     ev_total_kwh: Decimal
     consumption: tuple[UsageInterval, ...]
     ev_blocks: tuple[EVBlock, ...]

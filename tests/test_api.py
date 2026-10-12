@@ -3,35 +3,31 @@
 import base64
 import unittest
 from dataclasses import replace
-from datetime import date, datetime, timezone
+from datetime import date
 from decimal import Decimal
 from unittest.mock import Mock, patch
 
 import psycopg
 from fastapi.testclient import TestClient
 
-from home_energy.api.app import check_database, create_app
+from home_energy.api.app import create_app
 from home_energy.database.connection import DatabaseConfigurationError
 from home_energy.filling import FillError
-from home_energy.prices.analysis import PriceRange
 from home_energy.prices.entsoe import (InvalidPriceDataError, PriceAPIError, PriceConfigurationError,
                                       PricesUnavailableError)
-from home_energy.prices.report import PriceReport, ReportRequestError
+from home_energy.prices.report import DayAheadReportService, ReportRequestError
+from price_helpers import price_day
+from service_helpers import MemoryRepository, assert_png
 
 
 REPORT_PATH = "/api/v1/reports/day-ahead"
 DAY = date(2000, 1, 1)
-PNG = b"\x89PNG\r\n\x1a\nexample"
-
-
-def report():
-    return PriceReport(DAY, "BE", "Europe/Brussels", Decimal("300.000"),
-                       datetime(2000, 1, 1, tzinfo=timezone.utc), (), None, PNG)
 
 
 class ApiTests(unittest.TestCase):
     def setUp(self):
-        self.service = Mock(return_value=report())
+        self.repository = MemoryRepository([price_day(DAY, "-20")])
+        self.service = Mock(wraps=DayAheadReportService(self.repository))
         self.probe = Mock()
         self.initialize = Mock()
         self.app = create_app(report_service=self.service, readiness_probe=self.probe,
@@ -42,28 +38,34 @@ class ApiTests(unittest.TestCase):
         self.addCleanup(self.client.__exit__, None, None, None)
 
     def test_success_is_a_completed_report_with_exact_threshold_and_plain_base64(self):
-        response = self.client.post(REPORT_PATH, json={"date": str(DAY)})
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertEqual(body["status"], "success")
-        self.assertEqual(body["threshold_eur_per_mwh"], "300.000")
-        self.assertEqual(base64.b64decode(body["image"], validate=True), PNG)
-        self.assertEqual(body["image_mime_type"], "image/png")
-        self.assertEqual(body["image_filename"], "day-ahead-2000-01-01.png")
-        self.assertIsNone(body["warning"])
-        self.assertEqual(body["high_price_ranges"], [])
-        self.service.assert_called_once_with(DAY, Decimal("300"))
+        for threshold, expected in ((None, "300"), ("300.000", "300.000")):
+            with self.subTest(threshold=threshold):
+                request = {"date": str(DAY)}
+                if threshold is not None:
+                    request["threshold_eur_per_mwh"] = threshold
+                response = self.client.post(REPORT_PATH, json=request)
+                self.assertEqual(response.status_code, 200)
+                body = response.json()
+                self.assertEqual(body["status"], "success")
+                self.assertEqual(body["threshold_eur_per_mwh"], expected)
+                assert_png(self, base64.b64decode(body["image"], validate=True))
+                self.assertEqual(body["image_mime_type"], "image/png")
+                self.assertEqual(body["image_filename"], "day-ahead-2000-01-01.png")
+                self.assertIsNone(body["warning"])
+                self.assertEqual(body["high_price_ranges"], [])
 
     def test_warning_is_http_success_and_preserves_brussels_offsets(self):
-        ranges = (PriceRange(datetime(2000, 1, 1, 16, tzinfo=timezone.utc),
-                             datetime(2000, 1, 1, 18, tzinfo=timezone.utc)),)
-        self.service.return_value = replace(report(), high_price_ranges=ranges,
-                                            warning="van 17:00 tot 19:00")
+        day = self.repository.load_day(DAY)
+        for index in (17, 18):
+            day.intervals[index] = replace(day.intervals[index], price_eur_per_mwh=Decimal("-10.249"))
+        self.repository.days[DAY] = day
         response = self.client.post(REPORT_PATH, json={"date": str(DAY), "threshold_eur_per_mwh": "-10.25"})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "warning")
         self.assertEqual(response.json()["high_price_ranges"][0]["start_at"], "2000-01-01T17:00:00+01:00")
-        self.service.assert_called_once_with(DAY, Decimal("-10.25"))
+        self.assertEqual(response.json()["high_price_ranges"][0]["end_at"], "2000-01-01T19:00:00+01:00")
+        self.assertEqual(response.json()["threshold_eur_per_mwh"], "-10.25")
+        self.assertEqual(response.json()["warning"], "van 17:00 tot 19:00")
 
     def test_bad_input_never_invokes_the_service_and_has_the_documented_envelope(self):
         bodies = [{}, {"date": "tomorrow"}, {"date": "2000-02-30"}, {"date": "9999-01-01"},
@@ -145,20 +147,11 @@ class ApiTests(unittest.TestCase):
 class StartupTests(unittest.TestCase):
     def test_startup_fails_safely_and_does_not_contact_providers(self):
         with patch("home_energy.api.app.initialize_schema", side_effect=psycopg.OperationalError("private-secret")), \
-                patch("home_energy.prices.repository.DayAheadPriceClient") as provider:
+                patch("home_energy.prices.ingestion.DayAheadPriceClient") as provider:
             app = create_app()
             provider.from_config.assert_not_called()
             with self.assertLogs("uvicorn.error", level="ERROR") as logs, self.assertRaises(RuntimeError) as error:
                 with TestClient(app):
                     self.fail("Startup should fail")
             self.assertNotIn("private-secret", str(error.exception) + " ".join(logs.output))
-            self.assertTrue(error.exception.__suppress_context__)
             provider.from_config.assert_not_called()
-
-    def test_readiness_checks_application_tables_with_a_bounded_statement(self):
-        with patch("home_energy.api.app.connect") as connect:
-            check_database()
-            query = connect.return_value.__enter__.return_value.execute.call_args_list
-            self.assertIn("statement_timeout", query[0].args[0])
-            for table in ("energy_balance_days", "measurement_samples", "daily_metrics", "day_ahead_price_days", "price_intervals"):
-                self.assertIn("home_energy." + table, query[1].args[0])

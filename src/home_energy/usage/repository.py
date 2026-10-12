@@ -1,42 +1,22 @@
-"""Fill missing days and load stored data as Python objects."""
+"""Persist immutable usage snapshots and query stored Python objects."""
 
 from datetime import date
-from typing import Callable
-from contextlib import ExitStack
 
 from psycopg.types.json import Jsonb
 
-from .fusionsolar import FusionSolarClient
 from .constants import PLANT_ID
-from .filling import DataFetcher, validate_usage_range
-from ..filling import FillResult, fill_missing_days, validate_range
+from .consumption import validate_complete_day
+from ..filling import validate_range
 from .models import DailyMetric, EnergyBalanceDay, MeasurementSample
 from ..database.schema import Repository
 
 
 class EnergyBalanceRepository(Repository):
-    """Fill and query our fixed plant; reads only access PostgreSQL.
+    """Store and query our fixed plant; reads only access PostgreSQL.
 
     connection_factory can supply connections to an isolated database for tests.
     Stored days are never updated. Direct SQL administration is outside this API.
     """
-
-    def fill(self, start: date, end: date | None = None,
-             on_result: Callable[[FillResult], None] | None = None) -> list[FillResult]:
-        """Fill missing past days after schema initialization; existing days are skipped."""
-        end = validate_usage_range(start, end)
-        with ExitStack() as stack:
-            fetcher = None
-
-            def fetch_and_save(selected):
-                nonlocal fetcher
-                if fetcher is None:
-                    client = stack.enter_context(FusionSolarClient.from_config())
-                    fetcher = DataFetcher(client, self)
-                return fetcher.save(selected)
-
-            return fill_missing_days(start, end, has_day=self.has_day,
-                                     fetch_and_save=fetch_and_save, on_result=on_result)
 
     def has_day(self, day: date) -> bool:
         with self._connection() as connection:
@@ -48,12 +28,14 @@ class EnergyBalanceRepository(Repository):
     def save_day(self, day: EnergyBalanceDay) -> bool:
         """Return True for insertion, False for an existing immutable day.
 
-        Validation precedes all writes. The parent and all children commit in a
-        single transaction; any exception removes the entire new day.
+        Structural validation and complete consumption readings with a daily
+        total are required before any database access. The parent and all children
+        commit in a single transaction; any exception removes the entire new day.
         """
         day.validate()
         if day.plant_id != PLANT_ID:
             raise ValueError("A stored day must belong to our plant.")
+        validate_complete_day(day)
         with self._connection() as connection:
             row = connection.execute(
                 "INSERT INTO energy_balance_days "

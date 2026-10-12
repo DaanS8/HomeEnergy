@@ -1,6 +1,6 @@
 param(
     [ValidatePattern('^[A-Za-z0-9_.-]+$')]
-    [string]$Version = '0.1.0'
+    [string]$Version = '0.2.0'
 )
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot

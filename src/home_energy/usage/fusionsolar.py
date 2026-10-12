@@ -1,11 +1,11 @@
-"""Replay FusionSolar's authenticated, browser-observed energy-balance request."""
+"""Fetch FusionSolar's authenticated daily energy-balance endpoint."""
 
 import json
 import os
 import time
 from datetime import date as Date, datetime, time as Time
 from pathlib import Path
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import quote, urlencode
 from zoneinfo import ZoneInfo
 
 import requests
@@ -13,33 +13,17 @@ from dotenv import dotenv_values
 
 from .auth import AuthenticationError, FusionSolarError, SessionExpiredError, WebAuthentication
 from .constants import (
-    CAPTURED_DATE, DATE_STR_FORMAT, LOCAL_TIME, PLANT_ID, PLANT_TIMEZONE,
-    REQUEST_HEADERS, REQUEST_URL,
+    DATE_STR_FORMAT, PLANT_ID, PLANT_TIMEZONE, PORTAL_HOST,
+    REQUEST_HEADERS, REQUEST_URL, TIME_DIM, TIME_ZONE,
 )
-
-
-FIXED_CONFIG_KEYS = (
-    "request_url", "captured_date", "date_parameters", "plant_id",
-    "plant_timezone", "time_dim", "login_host",
-)
-
-
-def _validate_config(config):
-    if any(key in config for key in FIXED_CONFIG_KEYS):
-        raise ValueError("Plant and request settings are fixed in usage/constants.py.")
-    headers = requests.structures.CaseInsensitiveDict(config.get("headers", {}))
-    if any(name in headers and headers[name] != value for name, value in REQUEST_HEADERS.items()):
-        raise ValueError("Request headers are fixed in usage/constants.py.")
 
 
 def load_config(path=None):
-    """Load credentials, session settings and verified units; request values are fixed."""
+    """Load credentials, session settings, header overrides and verified units."""
     # No interpolation: passwords containing ${...} must remain literal.
     environment = {key: value for key, value in dotenv_values(
         Path(".env"), interpolate=False, encoding="utf-8-sig").items() if value is not None}
     environment.update(os.environ)
-    if any("FUSIONSOLAR_" + key.upper() in environment for key in FIXED_CONFIG_KEYS):
-        raise ValueError("Plant and request settings are fixed in usage/constants.py.")
     config = {}
     override_path = path or environment.get("FUSIONSOLAR_CONFIG")
     if override_path:
@@ -64,31 +48,14 @@ def load_config(path=None):
         config["cookies"] = environment["FUSIONSOLAR_COOKIES"]
         headers.pop("Cookie", None)
     config["headers"] = dict(headers)
-    _validate_config(config)
     return config
 
 
 class FusionSolarClient:
-    """Authenticated daily requests for our fixed plant."""
+    """Authenticated daily requests using the shared plant constants."""
 
     def __init__(self, config, timeout=30):
-        _validate_config(config)
         self.config = config
-        self.request_url = REQUEST_URL
-        self.url = urlsplit(self.request_url)
-        if (self.url.scheme != "https" or not self.url.hostname
-                or not self.url.hostname.endswith(".fusionsolar.huawei.com")
-                or self.url.path != "/rest/pvms/web/station/v3/overview/energy-balance"
-                or self.url.username or self.url.password or self.url.fragment):
-            raise ValueError("Set request_url to the captured HTTPS FusionSolar energy-balance URL.")
-        self.query = parse_qsl(self.url.query, keep_blank_values=True)
-        self.params = dict(self.query)
-        required = ("stationDn", "timeDim", "timeZone", "timeZoneStr", "queryTime", "dateStr")
-        if any(not self.params.get(key) for key in required):
-            raise ValueError("The captured URL is missing required query parameters.")
-        if len(self.query) != len(self.params):
-            raise ValueError("Duplicate query parameters are unsupported.")
-        self.captured_date = Date.fromisoformat(CAPTURED_DATE)
         if timeout <= 0:
             raise ValueError("timeout must be positive.")
         self.timeout = timeout
@@ -100,10 +67,10 @@ class FusionSolarClient:
             self.session.headers["Cookie"] = cookies
         elif isinstance(cookies, dict):
             for name, value in cookies.items():
-                self.session.cookies.set(name, value, domain=self.url.hostname, path="/", secure=True)
+                self.session.cookies.set(name, value, domain=PORTAL_HOST, path="/", secure=True)
         elif cookies is not None:
             raise ValueError("cookies must be a raw Cookie string or a JSON object.")
-        self.auth = WebAuthentication(self.session, config, self.url.hostname, self.timeout)
+        self.auth = WebAuthentication(self.session, config, PORTAL_HOST, self.timeout)
         self.auth.load()
         if not self.auth.enabled and not self.session.headers.get("Roarand"):
             raise ValueError("Supply the browser's Roarand header in config or FUSIONSOLAR_ROARAND.")
@@ -122,31 +89,22 @@ class FusionSolarClient:
     def timezone(self):
         return PLANT_TIMEZONE
 
-    def _date_params(self, day):
-        instant = datetime.combine(day, Time.fromisoformat(LOCAL_TIME), ZoneInfo(PLANT_TIMEZONE))
-        return {
-            "queryTime": str(int(instant.timestamp() * 1000)),
-            "dateStr": instant.strftime(DATE_STR_FORMAT),
-        }
-
     def request_url_for(self, date):
         """Return the URL used by get_energy_balance, for comparison with the UI."""
         day = Date.fromisoformat(date) if isinstance(date, str) else date
         if not isinstance(day, Date) or isinstance(day, datetime):
             raise ValueError("date must be a datetime.date or YYYY-MM-DD string.")
-        changes = {}
-        if day != self.captured_date:
-            # The recipe must also reproduce the original date before using it.
-            baseline = self._date_params(self.captured_date)
-            if any(self.params[key] != value for key, value in baseline.items()):
-                raise ValueError("Date constants do not reproduce the captured queryTime/dateStr.")
-            changes.update(self._date_params(day))
-            if "_" in self.params:
-                changes["_"] = str(time.time_ns() // 1_000_000)
-        if not changes:
-            return self.request_url
-        query = urlencode([(key, changes.get(key, value)) for key, value in self.query])
-        return urlunsplit(self.url._replace(query=query))
+        instant = datetime.combine(day, Time.min, ZoneInfo(PLANT_TIMEZONE))
+        query = urlencode({
+            "stationDn": PLANT_ID,
+            "timeDim": TIME_DIM,
+            "timeZone": TIME_ZONE,
+            "timeZoneStr": PLANT_TIMEZONE,
+            "queryTime": int(instant.timestamp() * 1000),
+            "dateStr": instant.strftime(DATE_STR_FORMAT),
+            "_": time.time_ns() // 1_000_000,
+        }, quote_via=quote)
+        return f"{REQUEST_URL}?{query}"
 
     def get_energy_balance(self, date):
         """Fetch one browser-observed date selection and return its untouched JSON object."""

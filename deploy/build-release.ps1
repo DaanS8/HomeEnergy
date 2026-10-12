@@ -1,6 +1,6 @@
 param(
     [ValidatePattern('^[A-Za-z0-9_.-]+$')]
-    [string]$Version = '0.1.0'
+    [string]$Version = '0.2.0'
 )
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
@@ -19,11 +19,16 @@ try {
     $imageNames = @("home-energy:$Version", "ghcr.io/daans8/home-energy:$Version")
     New-Item -ItemType Directory -Path $releaseDir | Out-Null
     Invoke-Docker -Arguments (@('save', '-o', (Join-Path $releaseDir 'images.tar')) + $imageNames)
-    $stackYaml = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'compose.portainer.yaml')).Replace('home-energy:0.1.0', "home-energy:$Version")
+    $stackYaml = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'compose.portainer.yaml'))
+    $stackYaml = [regex]::Replace($stackYaml, '(?m)^(\s*image:\s*)ghcr\.io/daans8/home-energy:[^\s#]+', {
+        param($match)
+        $match.Groups[1].Value + "ghcr.io/daans8/home-energy:$Version"
+    })
     [IO.File]::WriteAllText((Join-Path $releaseDir 'compose.portainer.yaml'), $stackYaml)
     Copy-Item -LiteralPath (Join-Path $projectRoot 'README.md') -Destination $releaseDir
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'RELEASE_NOTES.md') -Destination $releaseDir
     Copy-Item -LiteralPath (Join-Path $projectRoot 'docs') -Destination $releaseDir -Recurse
-    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'n8n-day-ahead.json') -Destination $releaseDir
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'n8n') -Destination $releaseDir -Recurse
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'publish-image.ps1') -Destination $releaseDir
     $images = & docker image inspect @imageNames
     if ($LASTEXITCODE -ne 0) { throw 'Image inspection failed.' }

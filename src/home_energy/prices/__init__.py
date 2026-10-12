@@ -2,5 +2,6 @@
 
 from .models import DayAheadPriceDay, PriceInterval
 from .repository import DayAheadPriceRepository
+from .ingestion import DayAheadPriceIngestionService
 
-__all__ = ["DayAheadPriceDay", "PriceInterval", "DayAheadPriceRepository"]
+__all__ = ["DayAheadPriceDay", "PriceInterval", "DayAheadPriceRepository", "DayAheadPriceIngestionService"]

@@ -22,7 +22,7 @@ def find_regions(readings: Iterable[tuple[datetime, Decimal | float | None]], *,
     """Find above-threshold runs in ordered readings; nulls and gaps break runs.
 
     Each reading covers the following sampling interval. Returned ends are
-    exclusive UTC instants. A zero minimum includes short runs for live status.
+    exclusive UTC instants.
     This same rule serves production ingestion and the investigation.
     """
     regions = []
@@ -53,20 +53,14 @@ def find_regions(readings: Iterable[tuple[datetime, Decimal | float | None]], *,
     return regions
 
 
-def detect_ev_blocks(readings: Sequence[tuple[datetime, Decimal | None]], start: datetime, end: datetime,
-                     *, open_end: bool) -> tuple[tuple[EVBlock, ...], datetime | None]:
-    """Qualify regions, clip to the local day, and identify a short live tail."""
-    runs = find_regions(readings, minimum_duration=timedelta(0))
+def detect_ev_blocks(readings: Sequence[tuple[datetime, Decimal]], start: datetime, end: datetime) -> tuple[EVBlock, ...]:
+    """Qualify regions and clip their energy to the requested local day."""
+    runs = find_regions(readings)
     blocks = []
     for begin, finish in runs:
-        if finish - begin < MINIMUM_EV_DURATION or begin >= end or finish <= start:
+        if begin >= end or finish <= start:
             continue
         begin, finish = max(begin, start), min(finish, end)
         energy = EV_POWER_KW * Decimal(int((finish - begin).total_seconds())) / Decimal(3600)
         blocks.append(EVBlock(begin, finish, EV_POWER_KW, energy))
-    pending = None
-    if open_end and runs and runs[-1][1] == readings[-1][0] + SAMPLE_INTERVAL:
-        begin, finish = runs[-1]
-        if finish - begin < MINIMUM_EV_DURATION:
-            pending = begin
-    return tuple(blocks), pending
+    return tuple(blocks)

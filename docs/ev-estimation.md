@@ -44,6 +44,8 @@ The unrounded mean is 2.1688235 kW. We use **2.169 kW** for detection and energy
 
 ## Using the estimate
 
+The daily API accepts dates at least two days ago in Europe/Brussels, so both adjacent context days have finished. It stores complete source days once and reuses them; incomplete consumption, daily totals, or required context return an error instead of a provisional estimate.
+
 Daily detection requires consumption **>2.169 kW for ≥120 continuous minutes** and draws an EV block at **2.169 kW**. We subtract no baseload. Each reading covers the following five-minute interval, so energy is `2.169 × charging hours`, counting only the part inside the local day. Across the dataset, this gives **18 regions, 129.583 hours and 281.066 kWh**. The daily API matches all 40 daily investigation estimates.
 
 The interval assumes independent stops that belong to the EV. Other appliances stopping, or household consumption changing at the same time, can affect the estimate. We have not confirmed whether the source readings are instantaneous or averaged. The two-hour rule also misses shorter charging sessions. Charger logs are needed to check which regions belong to the EV and how accurate the energy estimate is.

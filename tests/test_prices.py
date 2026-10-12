@@ -11,11 +11,10 @@ import pandas as pd
 import requests
 from entsoe.exceptions import NoMatchingDataError
 
-from home_energy.filling import FillError
-from home_energy.prices.entsoe import DayAheadPriceClient, PriceAPIError, PricesUnavailableError, normalize_prices
-from home_energy.prices.repository import DayAheadPriceRepository, validate_price_range
-from home_energy.usage import EnergyBalanceRepository
+from home_energy.prices.entsoe import (DayAheadPriceClient, InvalidPriceDataError, PriceAPIError,
+                                      PriceConfigurationError, PricesUnavailableError, normalize_prices)
 from price_helpers import price_day, price_series
+from helpers import isolated_configuration
 
 
 class PriceNormalizationTests(unittest.TestCase):
@@ -70,16 +69,32 @@ class PriceNormalizationTests(unittest.TestCase):
 
 
 class PriceClientTests(unittest.TestCase):
+    def test_bad_provider_data_and_configuration_have_distinct_error_types(self):
+        with patch("home_energy.prices.entsoe.EntsoePandasClient") as upstream:
+            upstream.return_value.query_day_ahead_prices.return_value = price_series().iloc[1:]
+            with DayAheadPriceClient("test-key") as client, self.assertRaises(InvalidPriceDataError):
+                client.get_day(date(2026, 10, 10))
+        with self.assertRaises(PriceConfigurationError):
+            DayAheadPriceClient("")
+        with patch("home_energy.prices.entsoe.dotenv_values", side_effect=UnicodeError("secret")), \
+                self.assertRaises(PriceConfigurationError) as error:
+            DayAheadPriceClient.from_config()
+        self.assertNotIn("secret", str(error.exception))
+
     def test_configuration_precedence_no_interpolation_or_environment_mutation(self):
-        with patch("home_energy.prices.entsoe.dotenv_values", return_value={"ENTSOE_API_KEY": "file-key"}) as dotenv, \
-                patch.dict(os.environ, {"ENTSOE_API_KEY": "process-key"}, clear=True), \
-                patch("home_energy.prices.entsoe.EntsoePandasClient") as upstream:
-            with DayAheadPriceClient.from_config():
-                self.assertEqual(upstream.call_args.kwargs["api_key"], "process-key")
-            self.assertFalse(dotenv.call_args.kwargs["interpolate"])
-            upstream.return_value.session.close.assert_called_once()
-        with patch("home_energy.prices.entsoe.dotenv_values", return_value={"ENTSOE_API_KEY": "file-key"}), \
-                patch.dict(os.environ, {"ENTSOE_API_KEY": ""}, clear=True):
+        file_key = "literal ${SECRET} # / +"
+        for process_key in (None, "process-key"):
+            environment = {"SECRET": "must-not-be-expanded"}
+            if process_key is not None:
+                environment["ENTSOE_API_KEY"] = process_key
+            with self.subTest(process_key=process_key), \
+                    isolated_configuration(f"ENTSOE_API_KEY='{file_key}'", environment), \
+                    patch("home_energy.prices.entsoe.EntsoePandasClient") as upstream:
+                with DayAheadPriceClient.from_config():
+                    self.assertEqual(upstream.call_args.kwargs["api_key"], process_key or file_key)
+                self.assertEqual(dict(os.environ), environment)
+                upstream.return_value.session.close.assert_called_once()
+        with isolated_configuration("ENTSOE_API_KEY=file-key", {"ENTSOE_API_KEY": ""}):
             with self.assertRaisesRegex(ValueError, "ENTSOE_API_KEY"):
                 DayAheadPriceClient.from_config()
 
@@ -105,38 +120,3 @@ class PriceClientTests(unittest.TestCase):
             upstream.return_value.query_day_ahead_prices.side_effect = NoMatchingDataError()
             with DayAheadPriceClient("test-key") as client, self.assertRaises(PricesUnavailableError):
                 client.get_day(date(2026, 10, 10))
-
-
-class PriceFillTests(unittest.TestCase):
-    def test_date_policy_uses_brussels_midnight(self):
-        now = datetime(2026, 10, 10, 22, 30, tzinfo=timezone.utc)
-        self.assertEqual(validate_price_range(date(2026, 10, 12), now=now), date(2026, 10, 12))
-        for start, end in [(date(2026, 10, 13), None), (date(2026, 10, 11), date(2026, 10, 10)),
-                           ("2026-10-10", None), (datetime(2026, 10, 10), None)]:
-            with self.assertRaises(ValueError):
-                validate_price_range(start, end, now)
-
-    def test_complete_skips_need_no_schema_setup_or_api_client_in_either_domain(self):
-        for repository_type, target in [(DayAheadPriceRepository, "home_energy.prices.repository.DayAheadPriceClient"),
-                                        (EnergyBalanceRepository, "home_energy.usage.repository.FusionSolarClient")]:
-            repository = repository_type()
-            with patch.object(repository, "initialize_schema") as initialize, \
-                    patch.object(repository, "has_day", return_value=True), \
-                    patch(target) as client:
-                self.assertFalse(repository.fill(date(2000, 1, 1))[0].inserted)
-                initialize.assert_not_called()
-                client.from_config.assert_not_called()
-
-    def test_unpublished_fill_is_not_saved_and_can_be_retried(self):
-        repository = DayAheadPriceRepository()
-        with patch.object(repository, "has_day", return_value=False), \
-                patch.object(repository, "save_day", return_value=True) as save, \
-                patch("home_energy.prices.repository.DayAheadPriceClient") as api:
-            client = api.from_config.return_value.__enter__.return_value
-            client.get_day.side_effect = PricesUnavailableError("Not published")
-            with self.assertRaises(FillError):
-                repository.fill(date(2026, 10, 10))
-            save.assert_not_called()
-            client.get_day.side_effect = None
-            client.get_day.return_value = price_day()
-            self.assertTrue(repository.fill(date(2026, 10, 10))[0].inserted)

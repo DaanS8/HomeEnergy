@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from home_energy.usage import EnergyBalanceRepository
+from home_energy.usage.ingestion import UsageIngestionService
 from home_energy.charts import LineSeries, build_line_chart, save_png
 
 
@@ -17,7 +18,7 @@ def main():
     args = parser.parse_args()
     repository = EnergyBalanceRepository()
     if not args.db_only:
-        repository.fill(args.date)
+        UsageIngestionService(repository).fill(args.date)
     day = repository.load_day(args.date)
     if day is None:
         raise SystemExit(f"No stored usage for {args.date}.")

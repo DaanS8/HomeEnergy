@@ -1,22 +1,24 @@
 """Boundary attribution, interruptions and missing-data safety for EV hypotheses."""
 
 from datetime import date, datetime, timedelta
+from contextlib import redirect_stdout
+import io
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import numpy as np
 import pandas as pd
 
-from home_energy.usage.constants import PLANT_ID
 from home_energy.investigations.ev.analysis import EVDetectionConfig, consumption_frame, investigate
 from home_energy.investigations.ev.report import (
     load_investigation_days, normalized_region_parts, region_profile, write_index, sensitivity_table,
 )
 
-
-from usage_helpers import DAY, ZONE, source_days
+from home_energy.usage.ingestion import UsageIngestionService
+from service_helpers import MemoryRepository, RecordingProvider
+from usage_helpers import DAY, NOW, ZONE, complete_energy_payload, source_days
 
 
 class DetectionTests(unittest.TestCase):
@@ -129,7 +131,7 @@ class DetectionTests(unittest.TestCase):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
                 EVDetectionConfig(**kwargs)
 
-    def test_no_detections_still_produce_index_and_tables(self):
+    def test_no_detections_still_produce_readable_index_with_boundary_explanation(self):
         result = investigate(source_days(), DAY, DAY)
         with tempfile.TemporaryDirectory() as output:
             write_index(result, Path(output), sensitivity_table(result))
@@ -213,30 +215,36 @@ class RegionProfileTests(unittest.TestCase):
 
 
 class ContextLoadingTests(unittest.TestCase):
-    def test_current_day_context_is_cached_and_never_saved_as_complete(self):
+    def test_unfinished_context_is_rejected_before_io(self):
         today = datetime.now(ZONE).date()
-        start = today - timedelta(days=1)
-        completed = source_days(first=start - timedelta(days=1), count=2)
-        boundary = source_days(first=today, count=1)[0]
-        payload = {"data": {"stationDn": PLANT_ID,
-                            "xAxis": [s.axis_label for s in boundary.samples if s.measurement == "usePower"],
-                            "usePower": [s.original_value for s in boundary.samples if s.measurement == "usePower"]}}
-        with tempfile.TemporaryDirectory() as output, \
-                patch("home_energy.investigations.ev.report.FusionSolarClient") as client, \
-                patch("home_energy.investigations.ev.report.EnergyBalanceRepository") as repo:
-            repo.return_value.load_range.side_effect = lambda *args: list(completed)
-            client_instance = client.from_config.return_value.__enter__.return_value
-            client_instance.get_energy_balance.return_value = payload
-            client_instance.plant_id, client_instance.timezone, client_instance.config = PLANT_ID, str(ZONE), {}
-            days = load_investigation_days(repo.return_value, start, start, output, fetch=True)
-            self.assertEqual(days[-1].sample_count, 24)
-            repo.return_value.save_day.assert_not_called()
-            cached = load_investigation_days(repo.return_value, start, start, output, fetch=False)
-            self.assertEqual(cached[-1].sample_count, 24)
-            custom = load_investigation_days(repo.return_value, start, start, output, fetch=False,
-                                             config=EVDetectionConfig(minimum_minutes=135))
-            self.assertEqual(custom[-1].sample_count, 27)
-            client_instance.get_energy_balance.assert_called_once()
+        repository = Mock()
+        with patch("home_energy.investigations.ev.report.UsageIngestionService") as ingestion:
+            for selected in (today - timedelta(days=1), today):
+                with self.subTest(selected=selected), self.assertRaises(ValueError):
+                    load_investigation_days(repository, selected, selected, fetch=True)
+            ingestion.assert_not_called()
+        repository.load_range.assert_not_called()
+
+    def test_both_context_days_are_filled_and_loaded_from_storage(self):
+        repository = MemoryRepository()
+        provider = RecordingProvider(complete_energy_payload)
+        ingestion = UsageIngestionService(repository, client_factory=lambda: provider, now=lambda: NOW)
+        with patch("home_energy.investigations.ev.report.UsageIngestionService", return_value=ingestion), \
+                redirect_stdout(io.StringIO()):
+            loaded = load_investigation_days(repository, DAY, DAY, fetch=True)
+            replay = load_investigation_days(repository, DAY, DAY, fetch=True)
+        required = [DAY - timedelta(days=1), DAY, DAY + timedelta(days=1)]
+        self.assertEqual([day.day for day in loaded], required)
+        self.assertEqual(loaded, replay)
+        self.assertEqual(provider.requests, required)
+        self.assertEqual(investigate(loaded, DAY, DAY).summary["api_total_kwh"], 42.75)
+
+    def test_missing_next_day_context_requires_fill(self):
+        repository = MemoryRepository(source_days(count=2))
+        with self.assertRaises(ValueError) as error:
+            load_investigation_days(repository, DAY, DAY)
+        self.assertIn(str(DAY + timedelta(days=1)), str(error.exception))
+        self.assertIn("--fetch", str(error.exception))
 
 
 if __name__ == "__main__":

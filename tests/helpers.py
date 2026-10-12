@@ -1,14 +1,25 @@
 """Small synthetic API fixtures shared by protocol and collection tests."""
 
 import json
-from datetime import date
+import os
+import tempfile
+from contextlib import contextmanager
+from datetime import date, datetime, timezone
+from pathlib import Path
+from unittest.mock import patch
 
 import requests
 
-from home_energy.usage.constants import PLANT_ID, REQUEST_URL
+from home_energy.usage.constants import PLANT_ID
+from home_energy.usage.energy_balance import parse_energy_balance
 
 
-URL = REQUEST_URL
+# Captured protocol fixture, independent of runtime request construction.
+URL = (
+    "https://uni004eu5.fusionsolar.huawei.com/rest/pvms/web/station/v3/overview/energy-balance?"
+    "stationDn=NE%3D147174083&timeDim=2&timeZone=2.0&timeZoneStr=Europe%2FBrussels"
+    "&queryTime=1791583200000&dateStr=2026-10-10%2000%3A00%3A00&_=1791718559952"
+)
 
 
 def config():
@@ -33,3 +44,23 @@ def energy_payload(day=date(2026, 10, 10)):
                      "usePower": ["1.12345678901234567890123456789", "2", ""],
                      "onGridPower": [], "totalProductPower": "12.650",
                      "selfUsePowerRatioByProduct": "33.333", "totalBusinessChargePower": None}}
+
+
+def parsed_energy_day(payload=None, day=date(2026, 10, 10), **kwargs):
+    return parse_energy_balance(energy_payload(day) if payload is None else payload,
+                                plant_id=PLANT_ID, day=day, timezone_name="Europe/Brussels",
+                                fetched_at=datetime(2026, 10, 11, tzinfo=timezone.utc), **kwargs)
+
+
+@contextmanager
+def isolated_configuration(contents, environment):
+    """Read an actual .env without inheriting workspace secrets or settings."""
+    previous = Path.cwd()
+    with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, environment, clear=True):
+        root = Path(directory)
+        (root / ".env").write_text(contents, encoding="utf-8-sig")
+        try:
+            os.chdir(root)
+            yield
+        finally:
+            os.chdir(previous)

@@ -1,41 +1,13 @@
 """Atomic price snapshots and database-only Python object queries."""
 
-from contextlib import ExitStack
-from datetime import date, datetime, timedelta, timezone
-from typing import Callable
-from zoneinfo import ZoneInfo
+from datetime import date, timezone
 
 from ..database.schema import Repository
-from ..filling import FillResult, fill_missing_days, validate_range
-from .entsoe import DayAheadPriceClient
-from .models import MARKET, TIMEZONE, DayAheadPriceDay, PriceInterval
-
-
-def validate_price_range(start, end=None, now=None):
-    end = validate_range(start, end)
-    today = (now or datetime.now(timezone.utc)).astimezone(ZoneInfo(TIMEZONE)).date()
-    if end > today + timedelta(days=1):
-        raise ValueError("Price fills support past dates, today, and tomorrow only.")
-    return end
+from ..filling import validate_range
+from .models import MARKET, DayAheadPriceDay, PriceInterval
 
 
 class DayAheadPriceRepository(Repository):
-    def fill(self, start: date, end: date | None = None,
-             on_result: Callable[[FillResult], None] | None = None) -> list[FillResult]:
-        """Fill missing days after schema initialization; existing days are skipped."""
-        end = validate_price_range(start, end)
-        with ExitStack() as stack:
-            client = None
-
-            def fetch_and_save(selected):
-                nonlocal client
-                if client is None:
-                    client = stack.enter_context(DayAheadPriceClient.from_config())
-                return self.save_day(client.get_day(selected))
-
-            return fill_missing_days(start, end, has_day=self.has_day,
-                                     fetch_and_save=fetch_and_save, on_result=on_result)
-
     def has_day(self, day: date) -> bool:
         validate_range(day)
         with self._connection() as connection:

@@ -12,8 +12,9 @@ from .database import initialize_schema
 from .database.connection import DatabaseConfigurationError
 from .filling import FillError
 from .prices import DayAheadPriceRepository
+from .prices.ingestion import DayAheadPriceIngestionService
 from .prices.entsoe import PriceAPIError
-from .usage import EnergyBalanceRepository
+from .usage.ingestion import UsageIngestionService
 from .usage.fusionsolar import FusionSolarError
 
 
@@ -53,7 +54,7 @@ def main(argv=None) -> int:
     investigate.add_argument("date", type=date.fromisoformat)
     investigate.add_argument("--end-date", type=date.fromisoformat, required=True)
     investigate.add_argument("--output", type=Path, default=Path("outputs/ev-investigation"))
-    investigate.add_argument("--fetch", action="store_true", help="Fill missing days and cache next-day context")
+    investigate.add_argument("--fetch", action="store_true", help="Fill missing completed days, including adjacent context days")
     investigate.add_argument("--consumption-unit", choices=("kW", "W"), default="kW",
                              help="Declare the power unit when source metadata is absent")
     investigate.add_argument("--threshold-kw", type=float, default=2.13,
@@ -67,8 +68,8 @@ def main(argv=None) -> int:
             initialize_schema()
             print("Database schema initialized.")
         elif args.command == "fill":
-            repository = EnergyBalanceRepository() if args.domain == "usage" else DayAheadPriceRepository()
-            repository.fill(
+            ingestion = UsageIngestionService() if args.domain == "usage" else DayAheadPriceIngestionService()
+            ingestion.fill(
                 args.date, args.end_date,
                 on_result=lambda r: print(f"{r.day}: {'stored' if r.inserted else 'already stored; skipped'}"),
             )

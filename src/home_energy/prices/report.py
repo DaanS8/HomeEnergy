@@ -1,19 +1,15 @@
 """Prepare a persisted price day and an in-memory report, independently of HTTP."""
 
-import io
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
-from threading import Lock
 from zoneinfo import ZoneInfo
 
-from ..charts import COLORS, chart_style
+from ..charts import render_png
 from .analysis import DEFAULT_THRESHOLD, PriceRange, analyse_prices
 from .chart import create_price_chart
-from .repository import DayAheadPriceRepository, validate_price_range
-
-
-_RENDER_LOCK = Lock()
+from .ingestion import DayAheadPriceIngestionService, validate_price_range
+from .repository import DayAheadPriceRepository
 
 
 class ReportRequestError(ValueError):
@@ -54,25 +50,27 @@ def warning_summary(ranges: tuple[PriceRange, ...], day: date, timezone: str) ->
 
 
 def _render_png(day, threshold: Decimal) -> bytes:
-    # rcParams and figure rendering are shared process state even with Agg.
-    with _RENDER_LOCK:
-        figure = create_price_chart(day, threshold=threshold)
-        try:
-            with io.BytesIO() as buffer, chart_style():
-                figure.savefig(buffer, format="png", dpi=180, bbox_inches="tight",
-                               facecolor=COLORS["background"])
-                return buffer.getvalue()
-        finally:
-            figure.clear()
+    return render_png(lambda: create_price_chart(day, threshold=threshold))
 
 
 class DayAheadReportService:
-    def __init__(self, repository: DayAheadPriceRepository | None = None):
-        self.repository = repository if repository is not None else DayAheadPriceRepository()
+    def __init__(self, repository: DayAheadPriceRepository | None = None, *, ingestion_service=None,
+                 now=None):
+        if repository is None:
+            repository = ingestion_service.repository if ingestion_service is not None else DayAheadPriceRepository()
+        if ingestion_service is not None and ingestion_service.repository is not repository:
+            raise ValueError("Report and ingestion must use the same repository.")
+        self.repository = repository
+        self.now = now if now is not None else (
+            ingestion_service.now if ingestion_service is not None else lambda: datetime.now(timezone.utc)
+        )
+        self.ingestion_service = ingestion_service if ingestion_service is not None else DayAheadPriceIngestionService(
+            repository, now=self.now,
+        )
 
     def __call__(self, selected_date: date, threshold: Decimal = DEFAULT_THRESHOLD) -> PriceReport:
         try:
-            validate_price_range(selected_date)
+            validate_price_range(selected_date, now=self.now())
         except ValueError as exc:
             raise ReportRequestError(str(exc)) from None
         try:
@@ -84,7 +82,7 @@ class DayAheadReportService:
         except (InvalidOperation, ValueError):
             raise ReportRequestError("Threshold must be a finite number in EUR/MWh.") from None
 
-        self.repository.fill(selected_date)
+        self.ingestion_service.fill(selected_date)
         day = self.repository.load_day(selected_date)
         if day is None:
             raise RuntimeError("A completed price fill did not produce a stored day.")

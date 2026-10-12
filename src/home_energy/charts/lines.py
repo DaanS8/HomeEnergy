@@ -1,7 +1,9 @@
 """Domain-independent line charts, highlighted segments, and PNG saving."""
 
 from dataclasses import dataclass
+import io
 from pathlib import Path
+from threading import Lock
 from typing import Callable, Sequence
 
 from matplotlib.backends.backend_agg import FigureCanvasAgg
@@ -9,6 +11,22 @@ from matplotlib.figure import Figure
 from matplotlib.ticker import FuncFormatter
 
 from .style import COLORS, chart_style
+
+
+_RENDER_LOCK = Lock()
+
+
+def render_png(create_figure: Callable[[], Figure]) -> bytes:
+    """Serialize styled PNG rendering across HTTP report types."""
+    with _RENDER_LOCK:
+        figure = create_figure()
+        try:
+            with io.BytesIO() as buffer, chart_style():
+                figure.savefig(buffer, format="png", dpi=180, bbox_inches="tight",
+                               facecolor=COLORS["background"])
+                return buffer.getvalue()
+        finally:
+            figure.clear()
 
 
 @dataclass(frozen=True)

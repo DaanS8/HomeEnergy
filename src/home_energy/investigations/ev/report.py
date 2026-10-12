@@ -16,60 +16,26 @@ import numpy as np
 import pandas as pd
 
 from ...charts import COLORS, chart_style
-from ...usage.energy_balance import parse_energy_balance
 from .analysis import ChargingRegion, EVDetectionConfig, EVInvestigation, day_bounds, investigate
-from ...usage.fusionsolar import FusionSolarClient
 from ...usage.repository import EnergyBalanceRepository
+from ...usage.ingestion import UsageIngestionService
 
 
-def load_investigation_days(repository, start, end, output, *, fetch=False, config=None):
-    """Completed days use immutable storage; next-day context may be a raw cache.
-
-    Never store today's incomplete response as a completed database day. Cache
-    its untouched API response separately and use the required boundary duration.
-    """
-    config = config or EVDetectionConfig()
-    context = pd.Timedelta(minutes=config.minimum_minutes)
+def load_investigation_days(repository, start, end, *, fetch=False):
+    """Load completed stored days, including both adjacent context days."""
     previous, following = start - timedelta(days=1), end + timedelta(days=1)
     today = datetime.now(timezone.utc).astimezone(ZoneInfo("Europe/Brussels")).date()
-    if end >= today:
-        raise ValueError("Investigate completed past days only.")
+    if start > end or following >= today:
+        raise ValueError("Investigate dates at least two days ago so both context days have finished.")
     if fetch:
-        repository.fill(previous, min(following, today - timedelta(days=1)),
+        UsageIngestionService(repository).fill(previous, following,
                         on_result=lambda r: print(f"{r.day}: {'stored' if r.inserted else 'already stored'}", flush=True))
     days = repository.load_range(previous, following)
     present = {d.day for d in days}
-    required = {previous + timedelta(days=i) for i in range((end - previous).days + 1)}
+    required = {previous + timedelta(days=i) for i in range((following - previous).days + 1)}
     missing = required - present
     if missing:
         raise ValueError(f"Missing stored days: {', '.join(map(str, sorted(missing)))}. Run with --fetch.")
-    if following not in present:
-        cache = Path(output) / "source" / f"boundary-{following}.json"
-        if fetch:
-            with FusionSolarClient.from_config() as client:
-                payload = client.get_energy_balance(following)
-                boundary = parse_energy_balance(payload, plant_id=client.plant_id, day=following,
-                                                timezone_name=client.timezone, units=client.config.get("units"))
-            cache.parent.mkdir(parents=True, exist_ok=True)
-            cache.write_text(json.dumps({"fetched_at": boundary.fetched_at.isoformat(),
-                                         "plant_id": boundary.plant_id, "timezone": boundary.timezone,
-                                         "units": {s.measurement: s.unit for s in boundary.samples if s.unit},
-                                         "payload": payload}, indent=2), encoding="utf-8")
-            print(f"{following}: cached {config.minimum_minutes:g}-minute context; incomplete day not stored", flush=True)
-        elif cache.exists():
-            stored = json.loads(cache.read_text(encoding="utf-8"))
-            boundary = parse_energy_balance(stored["payload"], plant_id=stored["plant_id"], day=following,
-                                            timezone_name=stored["timezone"], units=stored.get("units"),
-                                            fetched_at=datetime.fromisoformat(stored["fetched_at"]))
-        else:
-            raise ValueError(f"Missing {config.minimum_minutes:g}-minute context for {following}. Run with --fetch.")
-        lo, _ = day_bounds(following, boundary.timezone)
-        selected_indices = {s.sample_index for s in boundary.samples
-                            if s.observed_at is not None and lo <= s.observed_at < lo + context}
-        boundary.samples = [s for s in boundary.samples if s.sample_index in selected_indices]
-        boundary.sample_count = len(selected_indices)
-        boundary.validate()
-        days.append(boundary)
     return days
 
 
@@ -701,7 +667,7 @@ def run_investigation(start, end, output, *, fetch=False, config=None, unit="kW"
     if start > end:
         raise ValueError("Range start must not be after its end.")
     config = config or EVDetectionConfig()
-    days = load_investigation_days(repository or EnergyBalanceRepository(), start, end, output, fetch=fetch, config=config)
+    days = load_investigation_days(repository or EnergyBalanceRepository(), start, end, fetch=fetch)
     result = investigate(days, start, end, config=config, unit=unit)
     index = export_report(result, days, output)
     print(f"Report: {index.resolve()}", flush=True)

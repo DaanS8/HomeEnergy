@@ -8,7 +8,6 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from threading import Barrier
@@ -22,7 +21,7 @@ from psycopg import sql
 from home_energy.database import connect
 from home_energy.cli import main
 from home_energy.filling import FillError
-from home_energy.prices import DayAheadPriceRepository
+from home_energy.prices import DayAheadPriceRepository, DayAheadPriceIngestionService
 from home_energy.prices.entsoe import PricesUnavailableError
 from price_helpers import price_day
 
@@ -75,7 +74,7 @@ class PriceRepositoryIntegrationTests(unittest.TestCase):
     def test_real_cli_and_example_export_from_sql_without_api(self):
         self.repository.save_day(price_day())
         with tempfile.TemporaryDirectory() as directory, \
-                patch("home_energy.prices.repository.DayAheadPriceClient") as api, redirect_stdout(io.StringIO()):
+                patch("home_energy.prices.ingestion.DayAheadPriceClient") as api, redirect_stdout(io.StringIO()):
             cli_path = Path(directory) / "cli.png"
             self.assertEqual(main(["chart", "prices", "2026-10-10", "--output", str(cli_path)]), 0)
             example_path = Path(directory) / "example.png"
@@ -104,7 +103,7 @@ class PriceRepositoryIntegrationTests(unittest.TestCase):
     def test_database_queries_order_dates_omit_gaps_and_need_no_api_configuration(self):
         for day in (date(2026, 10, 10), date(2026, 10, 8)):
             self.repository.save_day(price_day(day))
-        with patch("home_energy.prices.repository.DayAheadPriceClient") as client:
+        with patch("home_energy.prices.ingestion.DayAheadPriceClient") as client:
             self.assertIsNone(self.repository.load_day(date(2026, 10, 9)))
             days = self.repository.load_range(date(2026, 10, 8), date(2026, 10, 10))
             self.assertEqual([day.day for day in days], [date(2026, 10, 8), date(2026, 10, 10)])
@@ -114,7 +113,7 @@ class PriceRepositoryIntegrationTests(unittest.TestCase):
             client.from_config.assert_not_called()
 
     def test_range_failure_resume_and_complete_skip_without_client(self):
-        with patch("home_energy.prices.repository.DayAheadPriceClient") as api:
+        with patch("home_energy.prices.ingestion.DayAheadPriceClient") as api:
             client = api.from_config.return_value.__enter__.return_value
 
             def fetch(day):
@@ -124,14 +123,14 @@ class PriceRepositoryIntegrationTests(unittest.TestCase):
 
             client.get_day.side_effect = fetch
             with self.assertRaises(FillError) as error:
-                self.repository.fill(date(2026, 10, 8), date(2026, 10, 10))
+                DayAheadPriceIngestionService(self.repository).fill(date(2026, 10, 8), date(2026, 10, 10))
             self.assertEqual(error.exception.day, date(2026, 10, 9))
             self.assertEqual(self.repository.list_available_dates(), [date(2026, 10, 8)])
             client.get_day.reset_mock()
             client.get_day.side_effect = price_day
-            results = self.repository.fill(date(2026, 10, 8), date(2026, 10, 10))
+            results = DayAheadPriceIngestionService(self.repository).fill(date(2026, 10, 8), date(2026, 10, 10))
             self.assertEqual([result.inserted for result in results], [False, True, True])
             self.assertEqual(client.get_day.call_count, 2)
             api.from_config.reset_mock()
-            self.repository.fill(date(2026, 10, 8), date(2026, 10, 10))
+            DayAheadPriceIngestionService(self.repository).fill(date(2026, 10, 8), date(2026, 10, 10))
             api.from_config.assert_not_called()

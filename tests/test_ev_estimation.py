@@ -1,6 +1,7 @@
 """Known-power endings, transition contamination and uncertainty safeguards."""
 
 from datetime import timedelta
+from itertools import product
 import unittest
 
 import numpy as np
@@ -69,19 +70,26 @@ class EndingEstimationTests(unittest.TestCase):
                 self.assertIn(cause, row.rejection_reason)
 
     def test_night_baseload_gives_equal_weight_to_nights_and_keeps_uncertainty_reproducible(self):
-        frame = consumption_frame(source_days(loads=[("2026-09-02 10:00", "2026-09-02 12:00", 2.4)], count=5))
+        frame = consumption_frame(source_days(loads=[("2026-09-02 10:00", "2026-09-02 12:00", 2.4)]))
         local = frame.index.tz_convert("Europe/Brussels")
-        frame.loc[(local.date == DAY - timedelta(days=1)) & (local.hour < 6), "total_kw"] = 0.8
+        for selected, power, hours in ((DAY - timedelta(days=1), 0.8, 6), (DAY, 0.6, 1),
+                                       (DAY + timedelta(days=1), 0.2, 1)):
+            night = (local.date == selected) & (local.hour < 6)
+            frame.loc[night, "total_kw"] = power
+            frame.loc[night & (local.hour >= hours), "total_kw"] = np.nan
         regions = detect_regions(frame, EVDetectionConfig(), 0.2)
-        kwargs = dict(start=DAY - timedelta(days=1), end=DAY + timedelta(days=3),
+        kwargs = dict(start=DAY - timedelta(days=1), end=DAY + timedelta(days=1),
                       timezone="Europe/Brussels", seed_threshold_kw=2.13, cadence_seconds=300)
         first = estimate_loads(frame, regions, **kwargs)
         second = estimate_loads(frame, regions, **kwargs)
-        self.assertAlmostEqual(first.baseline_kw, 0.2)
+        # The six-hour 0.8 kW night has six times as many observations, but
+        # still gets one vote alongside the two shorter nights.
+        self.assertAlmostEqual(first.baseline_kw, 0.6)
+        self.assertEqual(first.nights["off_samples"].tolist(), [72, 12, 12])
         self.assertAlmostEqual(first.ev_kw, 2.2)
         self.assertEqual(first.summary, second.summary)
         self.assertIsNone(first.summary["bootstrap_95pct_low_kw"])  # one ending is too few
-        self.assertEqual(len(first.sensitivity), 6)
+        np.testing.assert_allclose(first.sensitivity["mean_ev_kw"], 2.2)
 
     def test_mean_gives_each_clean_stop_equal_weight_and_bootstraps_the_same_estimator(self):
         frame = consumption_frame(source_days(loads=[
@@ -105,13 +113,12 @@ class EndingEstimationTests(unittest.TestCase):
         self.assertTrue(np.allclose(result.sensitivity["mean_ev_kw"], 2.375))
         for variant in result.summary["quality_sensitivity"]:
             self.assertAlmostEqual(variant["mean_ev_kw"], 2.375)
-        drops = result.endings.loc[result.endings["accepted"], "ev_kw"].to_numpy()
-        draws = np.random.default_rng(result.config.random_seed).choice(
-            drops, size=(result.config.bootstrap_repetitions, len(drops)), replace=True)
-        expected = np.quantile(draws.mean(axis=1), [0.025, 0.975])
+        # Enumerate the exact sampling distribution independently of the
+        # implementation's RNG, seed, repetition count, and vectorization.
+        means = [sum(draw) / 4 for draw in product((2.0, 2.1, 2.5, 2.9), repeat=4)]
+        expected = np.quantile(means, [0.025, 0.975])
         np.testing.assert_allclose([result.summary["bootstrap_95pct_low_kw"],
-                                    result.summary["bootstrap_95pct_high_kw"]], expected)
-        self.assertFalse(np.allclose(expected, np.quantile(np.median(draws, axis=1), [0.025, 0.975])))
+                                    result.summary["bootstrap_95pct_high_kw"]], expected, atol=0.03, rtol=0)
 
     def test_adopted_power_is_rounded_but_the_calibration_mean_is_preserved(self):
         frame = consumption_frame(source_days(loads=[

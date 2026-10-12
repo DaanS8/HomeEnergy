@@ -4,15 +4,9 @@ import unittest
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
-from home_energy.usage.energy_balance import EnergyBalanceValidationError, parse_energy_balance
+from home_energy.usage.energy_balance import EnergyBalanceValidationError
 from home_energy.usage.constants import PLANT_ID
-from helpers import energy_payload
-
-
-def parsed(payload=None, day=date(2026, 10, 10), **kwargs):
-    return parse_energy_balance(energy_payload(day) if payload is None else payload,
-                                plant_id=PLANT_ID, day=day, timezone_name="Europe/Brussels",
-                                fetched_at=datetime(2026, 10, 11, tzinfo=timezone.utc), **kwargs)
+from helpers import energy_payload, parsed_energy_day as parsed
 
 
 class ParserTests(unittest.TestCase):

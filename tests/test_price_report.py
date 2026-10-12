@@ -1,113 +1,93 @@
-"""Report composition, stored-day retries, PNG lifecycle, and warning labels."""
+"""Price reports protect exact warnings, committed data, and retry outcomes."""
 
 import unittest
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from threading import Event, Lock
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 from home_energy.filling import FillError
 from home_energy.prices.analysis import PriceRange
-from home_energy.prices.entsoe import (DayAheadPriceClient, InvalidPriceDataError,
-                                      PriceConfigurationError)
+from home_energy.prices.entsoe import InvalidPriceDataError
+from home_energy.prices.ingestion import DayAheadPriceIngestionService
 from home_energy.prices.report import DayAheadReportService, ReportRequestError, warning_summary
-from home_energy.prices.repository import DayAheadPriceRepository
-from price_helpers import price_day, price_series
+from price_helpers import price_day
+from service_helpers import MemoryRepository, RecordingProvider, assert_png
 
 
-DAY = date(2000, 1, 1)
+DAY = date(2026, 10, 10)
+NOW = datetime(2026, 10, 12, tzinfo=timezone.utc)
 
 
 class PriceReportTests(unittest.TestCase):
-    def test_report_returns_a_real_png_and_actual_price_warning(self):
+    def setUp(self):
+        self.repository = MemoryRepository()
+        self.provider = RecordingProvider(price_day)
+        ingestion = DayAheadPriceIngestionService(
+            self.repository, client_factory=lambda: self.provider, now=lambda: NOW,
+        )
+        self.service = DayAheadReportService(ingestion_service=ingestion)
+
+    def test_actual_spike_produces_warning_and_cached_replay_needs_no_provider(self):
         day = price_day(DAY, "100")
-        day.intervals[4] = replace(day.intervals[4], price_eur_per_mwh=Decimal("400"))
-        repository = Mock()
-        repository.load_day.return_value = day
-        result = DayAheadReportService(repository)(DAY)
-        repository.fill.assert_called_once_with(DAY)
-        repository.load_day.assert_called_once_with(DAY)
-        self.assertTrue(result.png.startswith(b"\x89PNG\r\n\x1a\n"))
-        self.assertEqual(len(result.high_price_ranges), 1)
-        self.assertEqual(result.high_price_ranges[0].start_at, day.intervals[4].start_at)
-        self.assertIn("04:00", result.warning)
+        day.intervals[16] = replace(day.intervals[16], price_eur_per_mwh=Decimal("400"))
+        self.provider.fetch = lambda selected: day
+        first, second = self.service(DAY), self.service(DAY)
+        self.assertEqual(first.high_price_ranges, second.high_price_ranges)
+        self.assertEqual(first.warning, second.warning)
+        self.assertEqual(first.high_price_ranges,
+                         (PriceRange(day.intervals[16].start_at, day.intervals[16].end_at),))
+        self.assertIn("04:00", first.warning)
+        self.assertIn("04:15", first.warning)
+        self.assertEqual(self.provider.requests, [DAY])
+        self.assertEqual(self.repository.load_day(DAY), day)
+        assert_png(self, first.png)
+        assert_png(self, second.png)
 
-    def test_a_retry_after_rendering_failure_uses_persisted_data_without_refetching(self):
-        repository = DayAheadPriceRepository()
-        stored = {}
-        def save(day):
-            stored[day.day] = day
-            return True
-        with patch.object(repository, "has_day", side_effect=lambda day: day in stored), \
-                patch.object(repository, "save_day", side_effect=save), \
-                patch.object(repository, "load_day", side_effect=stored.get), \
-                patch("home_energy.prices.repository.DayAheadPriceClient") as provider, \
-                patch("home_energy.prices.report._render_png", side_effect=[OSError("render failed"), b"png"]):
-            client = provider.from_config.return_value.__enter__.return_value
-            client.get_day.return_value = price_day(DAY)
-            service = DayAheadReportService(repository)
+    def test_negative_decimal_threshold_is_strict_and_unrounded(self):
+        self.repository.save_day(price_day(DAY, "-10.2500"))
+        equal = self.service(DAY, Decimal("-10.2500"))
+        self.assertEqual(equal.high_price_ranges, ())
+        self.assertIsNone(equal.warning)
+        lower = self.service(DAY, Decimal("-10.2501"))
+        self.assertEqual(lower.threshold, Decimal("-10.2501"))
+        self.assertEqual(len(lower.high_price_ranges), 1)
+        self.assertEqual(lower.high_price_ranges[0].start_at, self.repository.load_day(DAY).intervals[0].start_at)
+        self.assertEqual(lower.high_price_ranges[0].end_at, self.repository.load_day(DAY).intervals[-1].end_at)
+        self.assertEqual(self.provider.opened, 0)
+
+    def test_render_failure_retry_uses_persisted_data_without_refetching(self):
+        with patch("home_energy.prices.report.render_png", side_effect=OSError("render failed")):
             with self.assertRaises(OSError):
-                service(DAY)
-            result = service(DAY)
-            self.assertEqual(result.png, b"png")
-            self.assertIsNone(result.warning)
-            provider.from_config.assert_called_once()
-            client.get_day.assert_called_once_with(DAY)
+                self.service(DAY)
+        stored = self.repository.load_day(DAY)
+        result = self.service(DAY)
+        self.assertEqual(self.repository.load_day(DAY), stored)
+        self.assertEqual(self.provider.requests, [DAY])
+        self.assertIsNone(result.warning)
+        assert_png(self, result.png)
 
-    def test_invalid_input_is_distinct_from_invalid_provider_or_render_data(self):
-        repository = Mock()
-        service = DayAheadReportService(repository)
-        for day, threshold in [(date(9999, 1, 1), 300), (DAY, "NaN"), (DAY, True)]:
+    def test_invalid_request_and_provider_data_have_distinct_errors(self):
+        for day, threshold in ((date(9999, 1, 1), 300), (DAY, "NaN"), (DAY, True)):
             with self.subTest(day=day, threshold=threshold), self.assertRaises(ReportRequestError):
-                service(day, threshold)
-        repository.fill.assert_not_called()
-        repository.fill.side_effect = FillError(DAY, InvalidPriceDataError("invalid upstream"))
-        with self.assertRaises(FillError):
-            service(DAY)
-        repository.fill.side_effect = None
-        repository.load_day.return_value = None
-        with self.assertRaises(RuntimeError):
-            service(DAY)
+                self.service(day, threshold)
+        self.assertEqual(self.provider.opened, 0)
+        self.assertEqual(self.repository.days, {})
 
-    def test_render_releases_the_figure_on_success_and_save_failure(self):
-        repository = Mock()
-        repository.load_day.return_value = price_day(DAY)
-        with patch("home_energy.prices.report.create_price_chart") as create:
-            create.return_value.savefig.side_effect = OSError("write failed")
-            with self.assertRaises(OSError):
-                DayAheadReportService(repository)(DAY)
-            create.return_value.clear.assert_called_once_with()
+        def invalid_data(day):
+            raise InvalidPriceDataError("invalid upstream")
 
-    def test_concurrent_report_requests_do_not_overlap_chart_creation(self):
-        repository = Mock()
-        repository.load_day.return_value = price_day(DAY)
-        both_loaded = Event()
-        counter_lock = Lock()
-        calls = 0
-        def load(day):
-            nonlocal calls
-            with counter_lock:
-                calls += 1
-                if calls == 2:
-                    both_loaded.set()
-            return price_day(DAY)
-        repository.load_day.side_effect = load
-        acquired = Lock()
-        def create(day, threshold):
-            self.assertTrue(acquired.acquire(blocking=False), "Rendering overlapped")
-            figure = Mock()
-            def save(*args, **kwargs):
-                self.assertTrue(both_loaded.wait(5), "Second request did not reach rendering")
-            figure.savefig.side_effect = save
-            figure.clear.side_effect = acquired.release
-            return figure
-        with patch("home_energy.prices.report.create_price_chart", side_effect=create), \
-                ThreadPoolExecutor(max_workers=2) as pool:
-            futures = [pool.submit(DayAheadReportService(repository), DAY) for _ in range(2)]
-            for future in futures:
-                future.result(timeout=10)
+        self.provider.fetch = invalid_data
+        with self.assertRaises(FillError) as error:
+            self.service(DAY)
+        self.assertIsInstance(error.exception.cause, InvalidPriceDataError)
+        self.assertIsNone(self.repository.load_day(DAY))
+
+    def test_missing_committed_day_cannot_produce_a_report(self):
+        self.repository.save_day(price_day(DAY))
+        with patch.object(self.repository, "load_day", return_value=None):
+            with self.assertRaises(RuntimeError):
+                self.service(DAY)
 
     def test_dst_warning_labels_distinguish_repeated_hours_and_next_day_midnight(self):
         day = date(2026, 10, 25)
@@ -120,16 +100,16 @@ class PriceReportTests(unittest.TestCase):
         self.assertIn("2026-10-26 00:00", text)
         self.assertNotIn("**", text)
 
+    def test_concurrent_insert_analyses_committed_prices_instead_of_fetched_prices(self):
+        committed, fresh = price_day(DAY, "100"), price_day(DAY, "400")
+        self.provider.fetch = lambda day: fresh
 
-class ProviderFailureTests(unittest.TestCase):
-    def test_bad_provider_data_and_configuration_have_distinct_error_types(self):
-        with patch("home_energy.prices.entsoe.EntsoePandasClient") as upstream:
-            upstream.return_value.query_day_ahead_prices.return_value = price_series(DAY).iloc[1:]
-            with DayAheadPriceClient("test-key") as client, self.assertRaises(InvalidPriceDataError):
-                client.get_day(DAY)
-        with self.assertRaises(PriceConfigurationError):
-            DayAheadPriceClient("")
-        with patch("home_energy.prices.entsoe.dotenv_values", side_effect=UnicodeError("secret")), \
-                self.assertRaises(PriceConfigurationError) as error:
-            DayAheadPriceClient.from_config()
-        self.assertNotIn("secret", str(error.exception))
+        def competing_insert(day):
+            self.repository.days[day.day] = committed
+            return False
+
+        with patch.object(self.repository, "save_day", side_effect=competing_insert):
+            result = self.service(DAY)
+        self.assertEqual(result.high_price_ranges, ())
+        self.assertIsNone(result.warning)
+        self.assertEqual(result.fetched_at, committed.fetched_at)

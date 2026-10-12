@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import patch
 from home_energy.database import connect
 from home_energy.database.connection import DatabaseConfigurationError
+from helpers import isolated_configuration
 
 
 SETTINGS = {
@@ -16,16 +17,16 @@ SETTINGS = {
 class ConfigurationTests(unittest.TestCase):
     def test_process_overrides_file_without_mutating_environment_or_password(self):
         settings = {**SETTINGS, "PGPASSWORD": "literal ${SECRET} # / +"}
-        with patch("home_energy.database.connection.dotenv_values", return_value=settings.copy()) as dotenv:
-            with patch.dict(os.environ, {"PGHOST": "db", "PGPORT": "5432"}, clear=True):
-                with patch("home_energy.database.connection.psycopg.connect") as open_connection:
-                    self.assertIs(connect(), open_connection.return_value)
-                    open_connection.assert_called_once_with(
-                        host="db", port=5432, dbname="home_energy_dev",
-                        user="home_energy_dev", password=settings["PGPASSWORD"], connect_timeout=5,
-                    )
-                self.assertNotIn("PGPASSWORD", os.environ)
-        self.assertFalse(dotenv.call_args.kwargs["interpolate"])
+        contents = "\n".join(f"{key}='{value}'" for key, value in settings.items())
+        environment = {"PGHOST": "db", "PGPORT": "5432", "SECRET": "must-not-be-expanded"}
+        with isolated_configuration(contents, environment):
+            with patch("home_energy.database.connection.psycopg.connect") as open_connection:
+                connect()
+                open_connection.assert_called_once_with(
+                    host="db", port=5432, dbname="home_energy_dev",
+                    user="home_energy_dev", password=settings["PGPASSWORD"], connect_timeout=5,
+                )
+            self.assertEqual(dict(os.environ), environment)
 
     def test_missing_and_invalid_settings_fail_before_connecting_without_values(self):
         for key in SETTINGS:

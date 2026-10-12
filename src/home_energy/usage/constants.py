@@ -1,31 +1,17 @@
-"""Fixed values for our FusionSolar plant and verified daily request."""
-
-from types import MappingProxyType
-from urllib.parse import quote, urlencode
+"""Shared plant settings and FusionSolar request defaults."""
 
 PLANT_ID = "NE=147174083"
 PLANT_TIMEZONE = "Europe/Brussels"
 LOGIN_HOST = "eu5.fusionsolar.huawei.com"
+PORTAL_HOST = "uni004eu5.fusionsolar.huawei.com"
+REQUEST_URL = f"https://{PORTAL_HOST}/rest/pvms/web/station/v3/overview/energy-balance"
 TIME_DIM = 2
-CAPTURED_DATE = "2026-10-10"
-LOCAL_TIME = "00:00:00"
 DATE_STR_FORMAT = "%Y-%m-%d %H:%M:%S"
 
-# Preserve the captured parameter order and offset values.
-REQUEST_URL = (
-    "https://uni004eu5.fusionsolar.huawei.com/rest/pvms/web/station/v3/overview/energy-balance?"
-    + urlencode({
-        "stationDn": PLANT_ID,
-        "timeDim": TIME_DIM,
-        "timeZone": "2.0",
-        "timeZoneStr": PLANT_TIMEZONE,
-        "queryTime": 1791583200000,
-        "dateStr": f"{CAPTURED_DATE} {LOCAL_TIME}",
-        "_": 1791718559952,
-    }, quote_via=quote)
-)
+# Browser-observed provider fields; their winter interpretation is unverified.
+TIME_ZONE = "2.0"
 
-REQUEST_HEADERS = MappingProxyType({
+REQUEST_HEADERS = {
     "Accept": "application/json",
     "X-Requested-With": "XMLHttpRequest",
     "User-Agent": (
@@ -35,4 +21,4 @@ REQUEST_HEADERS = MappingProxyType({
     ),
     "X-Non-Renewal-Session": "true",
     "X-Timezone-Offset": "120",
-})
+}

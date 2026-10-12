@@ -13,8 +13,7 @@ from starlette.concurrency import run_in_threadpool
 from ..database import initialize_schema
 from ..database.connection import connect
 from ..prices.report import DayAheadReportService, PriceReport
-from ..usage.daily import DailyUsageService
-from ..usage.models import DailyUsage
+from ..usage.report import EVUsageReport, EVUsageReportService
 from .errors import error_response, register_error_handlers
 from .routes import router
 
@@ -32,7 +31,7 @@ def check_database() -> None:
 
 
 def create_app(*, report_service: Callable[[date, Decimal], PriceReport] | None = None,
-               usage_service: Callable[[date | None], DailyUsage] | None = None,
+               ev_report_service: Callable[[date | None], EVUsageReport] | None = None,
                readiness_probe: Callable[[], None] | None = None,
                schema_initializer: Callable[[], None] | None = None) -> FastAPI:
     initializer = schema_initializer if schema_initializer is not None else initialize_schema
@@ -46,14 +45,13 @@ def create_app(*, report_service: Callable[[date, Decimal], PriceReport] | None 
             raise RuntimeError(f"Home Energy startup failed (HTTP {response.status_code}). Check server settings.") from None
         yield
 
-    app = FastAPI(title="Home Energy API", version="0.1.0", lifespan=lifespan,
+    app = FastAPI(title="Home Energy API", version="0.2.0", lifespan=lifespan,
                   description="Daily consumption, EV blocks, and Belgian day-ahead price reports. "
                               "Dates use Europe/Brussels; power uses kW and energy uses kWh.",
                   openapi_tags=[{"name": "reports", "description": "Prepare completed energy reports."},
-                                {"name": "usage", "description": "Ingest daily consumption and estimate EV blocks."},
                                 {"name": "health", "description": "Process and database health."}])
     app.state.report_service = report_service if report_service is not None else DayAheadReportService()
-    app.state.usage_service = usage_service if usage_service is not None else DailyUsageService()
+    app.state.ev_report_service = ev_report_service if ev_report_service is not None else EVUsageReportService()
     app.state.readiness_probe = readiness_probe if readiness_probe is not None else check_database
     register_error_handlers(app)
     app.include_router(router)

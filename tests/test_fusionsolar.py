@@ -2,7 +2,7 @@
 
 import os
 import unittest
-from datetime import date
+from datetime import date, datetime
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
@@ -20,7 +20,7 @@ class ClientTests(unittest.TestCase):
 
     def test_exact_replay_and_raw_cookie_preservation(self):
         payload = {"success": True, "failCode": 0, "data": {"productPower": ["--", "0.000"]}}
-        with FusionSolarClient(config()) as client:
+        with FusionSolarClient(config()) as client, patch("home_energy.usage.fusionsolar.time.time_ns", return_value=1791718559952000000):
             prepared = client.session.prepare_request(requests.Request("GET", client.request_url_for(date(2026, 10, 10))))
             self.assertEqual(prepared.url, URL)
             self.assertEqual(prepared.headers["Cookie"], "sid=first; sid=second")
@@ -29,7 +29,7 @@ class ClientTests(unittest.TestCase):
                 self.assertEqual(client.get_energy_balance("2026-10-10"), payload)
                 get.assert_called_once_with(URL, timeout=30, allow_redirects=False)
 
-    def test_fixed_recipe_reproduces_second_capture(self):
+    def test_daily_request_reproduces_second_capture(self):
         with FusionSolarClient(config()) as client, patch("home_energy.usage.fusionsolar.time.time_ns", return_value=1791719451904000000):
             params = parse_qs(urlsplit(client.request_url_for("2026-10-09")).query)
             self.assertEqual(params["queryTime"], ["1791496800000"])
@@ -37,10 +37,11 @@ class ClientTests(unittest.TestCase):
             self.assertEqual(params["timeZone"], ["2.0"])
             self.assertEqual(params["_"], ["1791719451904"])
 
-    def test_wrong_recipe_rejected(self):
-        with patch("home_energy.usage.fusionsolar.LOCAL_TIME", "01:00:00"), \
-                FusionSolarClient(config()) as client, self.assertRaisesRegex(ValueError, "do not reproduce"):
-            client.get_energy_balance("2026-10-09")
+    def test_invalid_request_dates_rejected(self):
+        with FusionSolarClient(config()) as client:
+            for value in ("not-a-date", None, datetime(2026, 10, 10)):
+                with self.subTest(value=value), self.assertRaises(ValueError):
+                    client.request_url_for(value)
 
     def test_dst_timestamp_conversion_preserves_uninterpreted_timezone_parameter(self):
         with FusionSolarClient(config()) as client:

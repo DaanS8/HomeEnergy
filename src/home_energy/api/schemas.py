@@ -8,7 +8,7 @@ from typing import Literal
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 
 from ..prices.analysis import DEFAULT_THRESHOLD
-from ..prices.repository import validate_price_range
+from ..prices.ingestion import validate_price_range
 from ..usage.daily import validate_daily_date
 from ..usage.ev import EV_POWER_KW, MINIMUM_EV_DURATION, MODEL_VERSION
 
@@ -82,7 +82,7 @@ class HealthResponse(BaseModel):
 class DailyUsageRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    date: CalendarDate | None = Field(default=None, description="YYYY-MM-DD in Europe/Brussels, today or past. Omit for today.")
+    date: CalendarDate | None = Field(default=None, description="YYYY-MM-DD in Europe/Brussels, at least two days ago. Omit for two days ago.")
 
     @field_validator("date", mode="before")
     @classmethod
@@ -102,8 +102,8 @@ class DailyUsageRequest(BaseModel):
 class ConsumptionIntervalResponse(BaseModel):
     start_at: AwareDatetime
     end_at: AwareDatetime = Field(description="Exclusive end; five-minute interval.")
-    power_kw: str | None = Field(description="Total consumption in kW; exact Decimal string. Null means missing.")
-    ev_power_kw: str | None = Field(description="Estimated EV kW: 0 off, calibrated power on, null missing or pending qualification.")
+    power_kw: str = Field(description="Total consumption in kW; exact Decimal string.")
+    ev_power_kw: str = Field(description="Estimated EV kW: 0 off, calibrated power on.")
 
 
 class EVBlockResponse(BaseModel):
@@ -120,14 +120,18 @@ class EVModelResponse(BaseModel):
     method: Literal["mean_clean_stop_drop"] = "mean_clean_stop_drop"
 
 
-class DailyUsageResponse(BaseModel):
+class EVUsageReportResponse(BaseModel):
     date: CalendarDate
     timezone: Literal["Europe/Brussels"] = "Europe/Brussels"
-    status: Literal["complete", "provisional"] = Field(description="Complete requires consumption, total, and both two-hour boundary windows. Today is provisional.")
+    status: Literal["complete"] = "complete"
     fetched_at: AwareDatetime = Field(description="Timestamp of the requested day's FusionSolar snapshot.")
-    total_kwh: str | None = Field(description="FusionSolar totalUsePower in kWh; today is an evolving total. Null means unavailable.")
+    total_kwh: str = Field(description="FusionSolar total consumption for the completed day, in kWh.")
     total_kwh_source: Literal["fusionsolar.totalUsePower"] = "fusionsolar.totalUsePower"
-    ev_total_kwh: str = Field(description="Energy of the confirmed EV blocks within this day, in kWh.")
+    ev_total_kwh: str = Field(description="Estimated EV energy inside the requested day, in kWh.")
     ev_model: EVModelResponse = Field(default_factory=EVModelResponse)
     consumption: list[ConsumptionIntervalResponse]
     ev_blocks: list[EVBlockResponse]
+    image: str = Field(description="PNG encoded as plain base64, without a data-URL prefix.",
+                       json_schema_extra={"contentEncoding": "base64", "contentMediaType": "image/png"})
+    image_mime_type: Literal["image/png"] = "image/png"
+    image_filename: str

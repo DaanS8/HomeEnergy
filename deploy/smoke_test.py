@@ -19,7 +19,7 @@ from PIL import Image
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--image", default="home-energy:0.1.0")
+    parser.add_argument("--image", default="home-energy:0.2.0")
     parser.add_argument("--port", type=int, default=18001)
     parser.add_argument("--live-provider", action="store_true", help="Also fetch yesterday using the local ENTSOE_API_KEY")
     args = parser.parse_args()
@@ -62,8 +62,8 @@ def main():
                 time.sleep(1)
             raise RuntimeError("API did not become ready.")
 
-        def report(day, threshold="300"):
-            response = requests.post(base + "/api/v1/reports/day-ahead", json={"date": day, "threshold_eur_per_mwh": threshold}, timeout=180)
+        def post_report(path, body):
+            response = requests.post(base + path, json=body, timeout=180)
             if response.status_code != 200:
                 # The API error envelope is deliberately sanitized.
                 raise RuntimeError(f"Report failed: HTTP {response.status_code}: {response.json()}")
@@ -74,6 +74,12 @@ def main():
                 image.verify()
             return body, data
 
+        def report(day, threshold="300"):
+            return post_report("/api/v1/reports/day-ahead", {"date": day, "threshold_eur_per_mwh": threshold})
+
+        def ev_report(day):
+            return post_report("/api/v1/reports/ev/daily", {"date": day})
+
         try:
             docker("up", "-d", "--wait", "--wait-timeout", "120")
             ready()
@@ -81,6 +87,8 @@ def main():
             assert requests.get(base + "/health/live", timeout=10).json() == {"status": "ok"}
             schema = requests.get(base + "/openapi.json", timeout=10).json()
             assert "/api/v1/reports/day-ahead" in schema["paths"]
+            assert "/api/v1/reports/ev/daily" in schema["paths"]
+            assert schema["info"]["version"] == "0.2.0"
             invalid = requests.post(base + "/api/v1/reports/day-ahead", json={"date": "bad"}, timeout=10)
             assert invalid.status_code == 422 and not invalid.json()["retryable"]
             seed = '''from datetime import date, datetime, timezone
@@ -97,21 +105,58 @@ while start < end:
 DayAheadPriceRepository().save_day(DayAheadPriceDay(day, "BE", "Europe/Brussels", datetime.now(timezone.utc), intervals))
 '''
             docker("exec", "-T", "app", "python", "-", input=seed)
+            usage_seed = '''from datetime import date, datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
+from home_energy.usage.constants import PLANT_ID
+from home_energy.usage.energy_balance import parse_energy_balance
+from home_energy.usage.repository import EnergyBalanceRepository
+zone = ZoneInfo("Europe/Brussels")
+charge_start = datetime(2000, 1, 1, 23, 30, tzinfo=zone)
+charge_end = datetime(2000, 1, 2, 1, 30, tzinfo=zone)
+repository = EnergyBalanceRepository()
+for offset in range(-1, 4):
+    day = date(2000, 1, 1) + timedelta(days=offset)
+    start = datetime.combine(day, time.min, zone).astimezone(timezone.utc)
+    end = datetime.combine(day + timedelta(days=1), time.min, zone).astimezone(timezone.utc)
+    labels, values = [], []
+    while start < end:
+        local = start.astimezone(zone)
+        labels.append(local.isoformat())
+        values.append("2.4" if charge_start <= local < charge_end else "0.2")
+        start += timedelta(minutes=5)
+    payload = {"data": {"stationDn": PLANT_ID, "xAxis": labels,
+                        "usePower": values, "totalUsePower": "42.750"}}
+    repository.save_day(parse_energy_balance(payload, plant_id=PLANT_ID, day=day,
+                                             timezone_name="Europe/Brussels"))
+'''
+            docker("exec", "-T", "app", "python", "-", input=usage_seed)
             first, _ = report("2000-01-01")
             assert first["status"] == "success" and first["warning"] is None
             warning, _ = report("2000-01-01", "50")
             assert warning["status"] == "warning" and warning["high_price_ranges"]
+            usage, _ = ev_report("2000-01-01")
+            assert usage["status"] == "complete" and usage["total_kwh"] == "42.750"
+            assert usage["ev_total_kwh"] == "1.0845" and len(usage["ev_blocks"]) == 1
+            assert len(usage["consumption"]) == 288
+            assert usage["ev_blocks"][0]["end_at"] == "2000-01-02T00:00:00+01:00"
+            cached_usage, _ = ev_report("2000-01-01")
+            assert cached_usage["ev_total_kwh"] == usage["ev_total_kwh"]
+            no_charge, _ = ev_report("2000-01-03")
+            assert no_charge["ev_total_kwh"] == "0" and no_charge["ev_blocks"] == []
             docker("restart", "db", "app")
             ready()
             again, _ = report("2000-01-01")
             assert first["fetched_at"] == again["fetched_at"]
+            usage_again, _ = ev_report("2000-01-01")
+            assert usage_again["consumption"] == usage["consumption"]
+            assert usage_again["ev_total_kwh"] == usage["ev_total_kwh"]
             docker("stop", "db")
             unavailable = requests.get(base + "/health/ready", timeout=15)
             assert unavailable.status_code == 503 and unavailable.json()["code"] == "database_unavailable"
             assert requests.get(base + "/health/live", timeout=10).status_code == 200
             docker("start", "db")
             ready()
-            print("PASS: non-root startup, health, OpenAPI, validation, success/warning PNGs, restart persistence, database outage/recovery.", flush=True)
+            print("PASS: non-root startup, health, OpenAPI version, validation, price success/warning PNGs, EV PNG and midnight energy, cached reports, restart persistence, database outage/recovery.", flush=True)
             if args.live_provider:
                 day = (datetime.now(ZoneInfo("Europe/Brussels")) - timedelta(days=1)).date().isoformat()
                 live, png = report(day)
