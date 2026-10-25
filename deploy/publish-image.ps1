@@ -1,9 +1,14 @@
 param(
-    [ValidatePattern('^[A-Za-z0-9_.-]+$')]
-    [string]$Version = '0.2.0'
+    [ValidatePattern('^\d+\.\d+\.\d+$')]
+    [string]$Version
 )
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
+$projectFile = [IO.File]::ReadAllText((Join-Path $projectRoot 'pyproject.toml'))
+$projectVersion = [regex]::Match($projectFile, '(?m)^version = "(\d+\.\d+\.\d+)"').Groups[1].Value
+if (-not $projectVersion) { throw 'Cannot read the project version from pyproject.toml.' }
+if (-not $Version) { $Version = $projectVersion }
+if ($Version -ne $projectVersion) { throw "Version $Version does not match pyproject.toml ($projectVersion)." }
 $sourceImage = "home-energy:$Version"
 $registryImage = "ghcr.io/daans8/home-energy:$Version"
 
@@ -14,7 +19,17 @@ function Invoke-Docker {
 }
 
 # Publish the built and tested local image; this script does not rebuild it.
-Invoke-Docker -Arguments @('image', 'inspect', $sourceImage, '--format', '{{.Id}}')
+$localImage = & docker image inspect $sourceImage
+if ($LASTEXITCODE -ne 0) { throw "Build and smoke-test $sourceImage before publishing." }
+$localMetadata = ($localImage -join "`n" | ConvertFrom-Json)[0]
+if ($localMetadata.Config.Labels.'org.opencontainers.image.version' -ne $Version) {
+    throw 'The local image version label does not match the release version.'
+}
+# This package is public. Fail closed if its tags cannot be read.
+$registryToken = (Invoke-RestMethod -Uri 'https://ghcr.io/token?scope=repository:daans8/home-energy:pull&service=ghcr.io').token
+$registryHeaders = @{ Authorization = "Bearer $registryToken" }
+$registryTags = Invoke-RestMethod -Uri 'https://ghcr.io/v2/daans8/home-energy/tags/list' -Headers $registryHeaders
+if ($registryTags.tags -contains $Version) { throw "Tag $registryImage is already published. Choose a new version; existing releases are immutable." }
 Invoke-Docker -Arguments @('tag', $sourceImage, $registryImage)
 Invoke-Docker -Arguments @('push', $registryImage)
 
@@ -22,6 +37,8 @@ Invoke-Docker -Arguments @('push', $registryImage)
 Invoke-Docker -Arguments @('pull', $registryImage)
 $published = & docker image inspect $registryImage
 if ($LASTEXITCODE -ne 0) { throw 'Published image inspection failed.' }
+$publishedMetadata = ($published -join "`n" | ConvertFrom-Json)[0]
+if ($publishedMetadata.Id -ne $localMetadata.Id) { throw 'The pulled registry image differs from the local release image.' }
 $releaseDir = Join-Path $projectRoot "dist/home-energy-$Version"
 if (Test-Path -LiteralPath $releaseDir -PathType Container) {
     [IO.File]::WriteAllText((Join-Path $releaseDir 'registry.json'), ($published -join "`n"))

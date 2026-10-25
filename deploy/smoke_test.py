@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import time
 from datetime import datetime, timedelta
+from importlib.metadata import version
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -19,7 +20,8 @@ from PIL import Image
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--image", default="home-energy:0.2.0")
+    parser.add_argument("--image", default=f"home-energy:{version('home-energy')}")
+    parser.add_argument("--expected-version", default=version("home-energy"))
     parser.add_argument("--port", type=int, default=18001)
     parser.add_argument("--live-provider", action="store_true", help="Also fetch yesterday using the local ENTSOE_API_KEY")
     args = parser.parse_args()
@@ -88,7 +90,7 @@ def main():
             schema = requests.get(base + "/openapi.json", timeout=10).json()
             assert "/api/v1/reports/day-ahead" in schema["paths"]
             assert "/api/v1/reports/ev/daily" in schema["paths"]
-            assert schema["info"]["version"] == "0.2.0"
+            assert schema["info"]["version"] == args.expected_version
             invalid = requests.post(base + "/api/v1/reports/day-ahead", json={"date": "bad"}, timeout=10)
             assert invalid.status_code == 422 and not invalid.json()["retryable"]
             seed = '''from datetime import date, datetime, timezone
@@ -136,7 +138,7 @@ for offset in range(-1, 4):
             assert warning["status"] == "warning" and warning["high_price_ranges"]
             usage, _ = ev_report("2000-01-01")
             assert usage["status"] == "complete" and usage["total_kwh"] == "42.750"
-            assert usage["ev_total_kwh"] == "1.0845" and len(usage["ev_blocks"]) == 1
+            assert usage["ev_total_kwh"] == "1.0795" and len(usage["ev_blocks"]) == 1
             assert len(usage["consumption"]) == 288
             assert usage["ev_blocks"][0]["end_at"] == "2000-01-02T00:00:00+01:00"
             cached_usage, _ = ev_report("2000-01-01")

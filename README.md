@@ -136,30 +136,39 @@ See the [chart style guide](docs/chart-style-guide.md), [EV methodology](docs/ev
 
 Use [deploy/compose.portainer.yaml](deploy/compose.portainer.yaml) with an existing PostgreSQL database named `home_energy`. Set `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `ENTSOE_API_KEY`, `FUSIONSOLAR_USERNAME` and `FUSIONSOLAR_PASSWORD` in Portainer. Set `PGHOST` to the database host reachable from the app container. The app creates its own schema; PostgreSQL holds the persistent data.
 
-The stack uses `ghcr.io/daans8/home-energy:0.2.0` and defaults to `192.168.0.10:18000`. Build and test the release locally, then publish it and redeploy the Portainer stack:
+The stack uses `ghcr.io/daans8/home-energy:0.3.0` and defaults to `192.168.0.10:18000`. Follow the [home-server update guide](deploy/HOME_SERVER_UPDATE.md) for Portainer, SSH/Compose, verification and rollback. See the [release notes](deploy/RELEASE_NOTES.md) for this version's changes.
+
+Releases use new `MAJOR.MINOR.PATCH` tags, with no `latest` alias. `pyproject.toml` is the version source: the API reads installed package metadata and release scripts default to that version and reject a conflicting `-Version`. For the next release, choose an unused patch version for fixes or minor version for new behavior, bump `pyproject.toml`, run `uv lock`, and update the pinned deployment tag, these examples, release notes and server guide. Existing published tags are preserved.
+
+Build and test the release locally, then publish it:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File deploy/build-release.ps1 -Version 0.2.0
-uv run --locked python deploy/smoke_test.py --image home-energy:0.2.0
-powershell -ExecutionPolicy Bypass -File deploy/publish-image.ps1 -Version 0.2.0
+uv run --locked python -m unittest discover -s tests
+node tests/test_n8n_profiles.mjs
+powershell -ExecutionPolicy Bypass -File deploy/build-release.ps1 -Version 0.3.0
+uv run --locked python deploy/smoke_test.py --image home-energy:0.3.0 --expected-version 0.3.0
+powershell -ExecutionPolicy Bypass -File deploy/publish-image.ps1 -Version 0.3.0
 ```
 
-The build requires Docker; publishing requires a GHCR login. Release packaging includes this README, both guides and their figures, all n8n workflows, and checksums in `dist/home-energy-0.2.0/`. Add `--live-provider` to the smoke test to also verify a real ENTSO-E request. After publishing, deploy the packaged `compose.portainer.yaml` in Portainer with your existing environment variables and volumes.
+The build requires Docker's Linux engine and targets `linux/amd64`; publishing requires a GHCR login (`docker login ghcr.io -u DaanS8`, using a classic PAT with `write:packages`). Public images can be pulled anonymously. Release packaging includes an image tar, this README, release notes, the server guide, documentation and figures, n8n workflows, image metadata and checksums in `dist/home-energy-0.3.0/`. Run release scripts from the repository. Add `--live-provider` to the smoke test to also verify a real ENTSO-E request. Publishing verifies the pulled image matches the local image and records its digest in `registry.json`.
+
+Publishing alone does not update the home server. In Portainer, change the existing stack's `app` image to the new tag and update the stack, preserving environment variables and volumes. The [server guide](deploy/HOME_SERVER_UPDATE.md) includes the exact steps and health/report checks.
+
+The reusable [publish-docker-version skill](.agents/skills/publish-docker-version/SKILL.md) handles this workflow when you ask Codex to **publish a new docker version**. It is also installed in your user skills directory for discovery outside this workspace.
 
 Import [deploy/n8n/n8n-day-ahead.json](deploy/n8n/n8n-day-ahead.json), set its `base_url` to the app's reachable address and select the Discord credentials. It runs at 19:00 Brussels time for tomorrow, retries retryable failures every ten minutes up to six attempts, and sends the report PNG and warnings. Manual execution sends messages to its configured channels. Verify `/health/ready` and a fixed past-date report before activating the workflow.
 
-Two additional profiles publish their images and failure messages to the **admin** channel:
+The EV profile publishes its images and failure messages to the configured **admin** channel:
 
 | Import file | Daily schedule (Brussels) | Default report date |
 | --- | --- | --- |
-| [Day-ahead admin](deploy/n8n/n8n-day-ahead-admin.json) | 19:00 | Tomorrow |
 | [EV usage](deploy/n8n/n8n-ev-usage.json) | 08:00 | Two days ago |
 
-Configure `base_url` and `guild_id` in **Settings**, and select the Discord bot credentials. The day-ahead admin profile also exposes `admin_channel_id` in Settings; the EV workflow configures its destination directly in **Send image to admin** and **Send admin alert**.
+Configure `base_url` and `guild_id` in **Settings**, and select the Discord bot credentials. The EV workflow configures its destination directly in **Send image to admin** and **Send admin alert**.
 
 For EV, leave `test_date` blank and click **Run manually** to publish one report per day from `start_date` (default `2026-09-01`) through two days ago in Brussels, inclusive and in date order. Each report must be delivered before the loop advances. The daily schedule publishes only two days ago. To test a single date, set `test_date` to `YYYY-MM-DD`; EV dates must be at least two days ago. Clear it before enabling the schedule. Re-running a backfill republishes the selected dates; stored source data is reused. Change `start_date` to resume after the last delivered day if a run stops.
 
-Dates stay fixed across retries. Both imports are inactive initially, retry retryable API failures every ten minutes up to six attempts per date, and send no messages to the digest or warning channels. Exhausted report retries send an admin alert and stop the run.
+Dates stay fixed across retries. The EV import is inactive initially, retries retryable API failures every ten minutes up to six attempts per date, and sends no messages to the digest or warning channels. Exhausted report retries send an admin alert and stop the run.
 
 The EV image shows the measured five-minute consumption curve in blue and calibrated EV charging blocks in mint. It is published even when no EV charging is detected. The report reuses immutable source snapshots, so generating another report for an already stored day makes no FusionSolar requests. Its response contains the PNG, consumption readings, EV blocks and totals together. Deploy a build containing the new report endpoint before running the EV workflow.
 

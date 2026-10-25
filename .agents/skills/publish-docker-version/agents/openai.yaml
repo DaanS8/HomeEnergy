@@ -1,0 +1,6 @@
+interface:
+  display_name: "Publish Docker Version"
+  short_description: "Publish Home Energy and explain the server update"
+  default_prompt: "Use $publish-docker-version to publish a new Home Energy Docker version and give me the home-server update steps."
+policy:
+  allow_implicit_invocation: true

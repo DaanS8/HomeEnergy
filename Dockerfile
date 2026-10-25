@@ -26,7 +26,7 @@ RUN groupadd --gid 10001 app \
     && chown app:app /app/.cache /app/outputs
 
 ENV PATH="/app/.venv/bin:${PATH}"
-ARG VERSION=0.2.0
+ARG VERSION=dev
 LABEL org.opencontainers.image.source="https://github.com/DaanS8/TrackingPowerUsage" \
       org.opencontainers.image.description="Home Energy API for Belgian day-ahead prices and home energy reports" \
       org.opencontainers.image.version="${VERSION}"

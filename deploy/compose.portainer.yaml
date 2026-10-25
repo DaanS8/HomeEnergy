@@ -1,7 +1,7 @@
 # Public GHCR image; configure app variables in Portainer before deployment.
 services:
   app:
-    image: ghcr.io/daans8/home-energy:0.2.0
+    image: ghcr.io/daans8/home-energy:0.3.0
     pull_policy: if_not_present
     restart: unless-stopped
     init: true

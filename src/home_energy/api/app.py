@@ -5,6 +5,7 @@ from collections.abc import Callable
 from contextlib import asynccontextmanager
 from datetime import date
 from decimal import Decimal
+from importlib.metadata import version
 from time import perf_counter
 
 from fastapi import FastAPI, Request
@@ -45,7 +46,7 @@ def create_app(*, report_service: Callable[[date, Decimal], PriceReport] | None 
             raise RuntimeError(f"Home Energy startup failed (HTTP {response.status_code}). Check server settings.") from None
         yield
 
-    app = FastAPI(title="Home Energy API", version="0.2.0", lifespan=lifespan,
+    app = FastAPI(title="Home Energy API", version=version("home-energy"), lifespan=lifespan,
                   description="Daily consumption, EV blocks, and Belgian day-ahead price reports. "
                               "Dates use Europe/Brussels; power uses kW and energy uses kWh.",
                   openapi_tags=[{"name": "reports", "description": "Prepare completed energy reports."},

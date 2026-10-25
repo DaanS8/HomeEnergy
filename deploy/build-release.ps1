@@ -1,11 +1,18 @@
 param(
-    [ValidatePattern('^[A-Za-z0-9_.-]+$')]
-    [string]$Version = '0.2.0'
+    [ValidatePattern('^\d+\.\d+\.\d+$')]
+    [string]$Version
 )
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
+$projectFile = [IO.File]::ReadAllText((Join-Path $projectRoot 'pyproject.toml'))
+$projectVersion = [regex]::Match($projectFile, '(?m)^version = "(\d+\.\d+\.\d+)"').Groups[1].Value
+if (-not $projectVersion) { throw 'Cannot read the project version from pyproject.toml.' }
+if (-not $Version) { $Version = $projectVersion }
+if ($Version -ne $projectVersion) { throw "Version $Version does not match pyproject.toml ($projectVersion). Bump the project version first." }
 $releaseDir = Join-Path $projectRoot "dist/home-energy-$Version"
 if (Test-Path -LiteralPath $releaseDir) { throw "Release already exists: $releaseDir. Choose another version or archive the existing release." }
+$releaseNotes = Join-Path $PSScriptRoot 'RELEASE_NOTES.md'
+if (-not (Test-Path -LiteralPath $releaseNotes -PathType Leaf)) { throw "Missing release notes: $releaseNotes" }
 
 function Invoke-Docker {
     param([string[]]$Arguments)
@@ -27,9 +34,9 @@ try {
     [IO.File]::WriteAllText((Join-Path $releaseDir 'compose.portainer.yaml'), $stackYaml)
     Copy-Item -LiteralPath (Join-Path $projectRoot 'README.md') -Destination $releaseDir
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'RELEASE_NOTES.md') -Destination $releaseDir
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'HOME_SERVER_UPDATE.md') -Destination $releaseDir
     Copy-Item -LiteralPath (Join-Path $projectRoot 'docs') -Destination $releaseDir -Recurse
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'n8n') -Destination $releaseDir -Recurse
-    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'publish-image.ps1') -Destination $releaseDir
     $images = & docker image inspect @imageNames
     if ($LASTEXITCODE -ne 0) { throw 'Image inspection failed.' }
     [IO.File]::WriteAllText((Join-Path $releaseDir 'images.json'), ($images -join "`n"))
