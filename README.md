@@ -22,13 +22,15 @@ For local Python development, start `docker compose up -d --wait db`, then run `
 | POST endpoint | JSON request | Result |
 | --- | --- | --- |
 | `/api/v1/reports/ev/daily` | `{"date":"2026-10-10"}` or `{}` | Consumption readings, EV blocks, totals and a base64 PNG with EV blocks overlaid |
-| `/api/v1/reports/day-ahead` | `{"date":"2026-10-12","threshold_eur_per_mwh":"300"}` | Price analysis, `success`/`warning`, warning text and a base64 PNG |
+| `/api/v1/reports/day-ahead` | `{"date":"2026-10-12","threshold_eur_per_mwh":"300","hysteresis_eur_per_mwh":"25"}` | Price analysis, `success`/`warning`, warning text and a base64 PNG |
 
 Usage accepts dates **at least two days ago**; `{}` selects two days ago in Brussels. EV detection requires **two continuous hours above 2.169 kW**, using two hours of boundary context on each side. The EV power is the equal-weight mean of accepted clean-stop drops, rounded to 0.001 kW; see [how we estimate it](docs/ev-estimation.md). No baseload is subtracted. The requested day and both adjacent days must have finished. Missing days are fetched once and stored only when every consumption interval and the daily total are available; stored days are immutable and reused. Successful reports always return `status: "complete"`. Yesterday and today are rejected with 422; incomplete consumption or required context returns 502.
 
 Usage returns Decimal powers/energies as strings and timestamps with Brussels offsets. The daily total comes from FusionSolar's `totalUsePower`; it is separate from integrating the sampled curve. See [EV estimation](docs/ev-estimation.md) for calibration evidence.
 
-Price dates extend through tomorrow once published. Actual prices above the threshold produce a warning; both report statuses return HTTP 200. Errors use `{status,error,code,retryable}`: 422 invalid input, 502 provider/data failure, 503 unavailable prices/database, or 500 configuration/processing failure. n8n controls scheduling and retries.
+Price dates extend through tomorrow once published. The trigger defaults to **300 EUR/MWh** and the nonnegative hysteresis margin to **25 EUR/MWh**. A warning region is a contiguous run strictly above trigger minus margin that contains at least one price strictly above the trigger. With the defaults, a peak above 300 colours its neighbouring intervals above 275 red in both directions; 275 breaks a region, and 300 alone does not trigger one. Nearby peaks join while intervening prices stay above 275. Regions are clipped to the requested day.
+
+The chart shows actual interval prices as steps. Red steps, `high_price_ranges`, and the Dutch warning text describe the same regions. The response echoes `threshold_eur_per_mwh` and `hysteresis_eur_per_mwh` as exact Decimal strings. Both settings are optional; existing n8n requests adopt the defaults automatically. Set `hysteresis_eur_per_mwh` to `"0"` for strict threshold ranges. Both report statuses return HTTP 200. Errors use `{status,error,code,retryable}`: 422 invalid input, 502 provider/data failure, 503 unavailable prices/database, or 500 configuration/processing failure. n8n controls scheduling and retries.
 
 ## CLI and investigation
 
@@ -36,10 +38,13 @@ Price dates extend through tomorrow once published. Actual prices above the thre
 uv run home-energy fill usage 2026-10-10
 uv run home-energy fill prices 2026-10-08 --end-date 2026-10-10
 uv run home-energy chart prices 2026-10-10 --output outputs/prices.png
+uv run home-energy chart prices 2026-10-10 --output outputs/prices-strict.png --threshold 300 --hysteresis 0
 uv run --locked home-energy investigate ev 2026-09-01 --end-date 2026-10-10 --fetch --output outputs/ev-investigation-2026-09-01_2026-10-10
 ```
 
 Usage fills accept past days and reject incomplete consumption or missing daily totals before storage. Repeated fills skip stored dates; price charts read stored data. The EV investigation exports real-data graphs, CSV tables, a PDF and an HTML index. Investigation dates must be at least two days ago; both adjacent context days are stored in the database. Omit `--fetch` to reuse stored data.
+
+Price charts and `examples/day_ahead_prices.py` accept `--threshold` (default 300) and `--hysteresis` (default 25), both in EUR/MWh. Zero hysteresis disables range expansion.
 
 ## Structure
 
@@ -150,7 +155,11 @@ Two additional profiles publish their images and failure messages to the **admin
 | [Day-ahead admin](deploy/n8n/n8n-day-ahead-admin.json) | 19:00 | Tomorrow |
 | [EV usage](deploy/n8n/n8n-ev-usage.json) | 08:00 | Two days ago |
 
-In each workflow's **Settings** node, configure `base_url`, `guild_id` and `admin_channel_id`, and select the Discord bot credentials. For testing, set `test_date` to a fixed `YYYY-MM-DD` and click **Run manually**. EV dates must still be at least two days ago. Leave `test_date` blank for the default date; clear it before enabling the schedule. Dates stay fixed across retries. Both imports are inactive initially, retry retryable API failures every ten minutes up to six attempts, and send no messages to the digest or warning channels.
+Configure `base_url` and `guild_id` in **Settings**, and select the Discord bot credentials. The day-ahead admin profile also exposes `admin_channel_id` in Settings; the EV workflow configures its destination directly in **Send image to admin** and **Send admin alert**.
+
+For EV, leave `test_date` blank and click **Run manually** to publish one report per day from `start_date` (default `2026-09-01`) through two days ago in Brussels, inclusive and in date order. Each report must be delivered before the loop advances. The daily schedule publishes only two days ago. To test a single date, set `test_date` to `YYYY-MM-DD`; EV dates must be at least two days ago. Clear it before enabling the schedule. Re-running a backfill republishes the selected dates; stored source data is reused. Change `start_date` to resume after the last delivered day if a run stops.
+
+Dates stay fixed across retries. Both imports are inactive initially, retry retryable API failures every ten minutes up to six attempts per date, and send no messages to the digest or warning channels. Exhausted report retries send an admin alert and stop the run.
 
 The EV image shows the measured five-minute consumption curve in blue and calibrated EV charging blocks in mint. It is published even when no EV charging is detected. The report reuses immutable source snapshots, so generating another report for an already stored day makes no FusionSolar requests. Its response contains the PNG, consumption readings, EV blocks and totals together. Deploy a build containing the new report endpoint before running the EV workflow.
 

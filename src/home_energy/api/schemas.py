@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 
-from ..prices.analysis import DEFAULT_THRESHOLD
+from ..prices.analysis import DEFAULT_HYSTERESIS, DEFAULT_THRESHOLD
 from ..prices.ingestion import validate_price_range
 from ..usage.daily import validate_daily_date
 from ..usage.ev import EV_POWER_KW, MINIMUM_EV_DURATION, MODEL_VERSION
@@ -21,6 +21,11 @@ class DayAheadReportRequest(BaseModel):
     threshold_eur_per_mwh: Decimal = Field(default=DEFAULT_THRESHOLD, allow_inf_nan=False,
                                          description="Actual prices strictly above this finite EUR/MWh threshold warn.",
                                          examples=["300"])
+    hysteresis_eur_per_mwh: Decimal = Field(
+        default=DEFAULT_HYSTERESIS, allow_inf_nan=False, ge=0,
+        description="Expand warning ranges in both directions through prices strictly above threshold minus this margin. "
+                    "Zero restores strict threshold ranges.", examples=["25"],
+    )
 
     @field_validator("date", mode="before")
     @classmethod
@@ -44,7 +49,8 @@ class HighPriceRangeResponse(BaseModel):
 class DayAheadReportResponse(BaseModel):
     model_config = ConfigDict(json_schema_extra={"examples": [{
         "date": "2026-10-12", "market": "BE", "timezone": "Europe/Brussels",
-        "threshold_eur_per_mwh": "300", "fetched_at": "2026-10-11T17:00:00Z",
+        "threshold_eur_per_mwh": "300", "hysteresis_eur_per_mwh": "25",
+        "fetched_at": "2026-10-11T17:00:00Z",
         "status": "warning", "image": "<base64 PNG>", "image_mime_type": "image/png",
         "image_filename": "day-ahead-2026-10-12.png", "warning": "van 17:00 tot 19:00",
         "high_price_ranges": [{"start_at": "2026-10-12T17:00:00+02:00",
@@ -55,6 +61,7 @@ class DayAheadReportResponse(BaseModel):
     market: Literal["BE"] = "BE"
     timezone: Literal["Europe/Brussels"] = "Europe/Brussels"
     threshold_eur_per_mwh: str = Field(description="Exact Decimal threshold in EUR/MWh, encoded as a string.")
+    hysteresis_eur_per_mwh: str = Field(description="Exact Decimal expansion margin in EUR/MWh, encoded as a string.")
     fetched_at: AwareDatetime = Field(description="Timestamp of the stored provider snapshot.")
     status: Literal["success", "warning"]
     image: str = Field(description="PNG encoded as plain base64, without a data-URL prefix.",

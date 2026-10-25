@@ -15,7 +15,7 @@ router = APIRouter()
 
 def _error_docs(statuses):
     descriptions = {
-        422: "Invalid date, threshold, or request fields.",
+        422: "Invalid date, threshold, hysteresis margin, or request fields.",
         502: "Price provider unavailable, or invalid provider data.",
         503: "Prices not yet published, or database unavailable.",
         500: "Invalid server configuration or report processing failure.",
@@ -33,15 +33,19 @@ def _error_docs(statuses):
              operation_id="prepare_day_ahead_report", tags=["reports"],
              summary="Prepare a stored day-ahead price report",
              description="Fetch missing prices, persist a complete day, and return analysis and a base64 PNG. "
-                         "Existing days are reused. Warnings concern actual prices; smoothing is display-only. "
+                         "Existing days are reused. Actual prices are drawn as interval steps. Warning ranges are "
+                         "contiguous runs strictly above threshold minus hysteresis containing a price above threshold. "
+                         "Ranges expand in both directions and match the chart's red steps. "
                          "Both success and warning reports return HTTP 200.",
              responses=_error_docs((422, 502, 503, 500)))
 def day_ahead_report(payload: DayAheadReportRequest, request: Request):
-    report = request.app.state.report_service(payload.date, payload.threshold_eur_per_mwh)
+    report = request.app.state.report_service(payload.date, payload.threshold_eur_per_mwh,
+                                             hysteresis=payload.hysteresis_eur_per_mwh)
     zone = ZoneInfo(report.timezone)
     return DayAheadReportResponse(
         date=report.day, market=report.market, timezone=report.timezone,
-        threshold_eur_per_mwh=str(report.threshold), fetched_at=report.fetched_at,
+        threshold_eur_per_mwh=str(report.threshold), hysteresis_eur_per_mwh=str(report.hysteresis),
+        fetched_at=report.fetched_at,
         status="warning" if report.high_price_ranges else "success",
         image=base64.b64encode(report.png).decode("ascii"),
         image_filename=f"day-ahead-{report.day}.png", warning=report.warning,

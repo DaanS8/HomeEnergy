@@ -7,29 +7,36 @@ from zoneinfo import ZoneInfo
 
 from matplotlib.figure import Figure
 
-from ..charts import HighlightSegment, LineSeries, build_line_chart
-from .analysis import DEFAULT_THRESHOLD, SUPPLIED_REFERENCE_PROFILE, analyse_prices
+from ..charts import LineSeries, build_line_chart
+from .analysis import (DEFAULT_HYSTERESIS, DEFAULT_THRESHOLD, SUPPLIED_REFERENCE_PROFILE,
+                       PriceAnalysis, analyse_prices)
 from .models import DayAheadPriceDay
 
 
 def create_price_chart(day: DayAheadPriceDay, *, threshold: Decimal = DEFAULT_THRESHOLD,
-                       reference_profile: Sequence | None = SUPPLIED_REFERENCE_PROFILE) -> Figure:
-    analysis = analyse_prices(day, threshold=threshold, reference_profile=reference_profile)
-    x = [interval.start_at for interval in day.intervals] + [day.intervals[-1].end_at]
-    curve = [*analysis.smoothed_prices, analysis.smoothed_prices[-1]]
+                       hysteresis: Decimal = DEFAULT_HYSTERESIS,
+                       reference_profile: Sequence | None = SUPPLIED_REFERENCE_PROFILE,
+                       analysis: PriceAnalysis | None = None) -> Figure:
+    """Plot actual interval prices, optionally reusing the report's analysis."""
+    if analysis is None:
+        analysis = analyse_prices(day, threshold=threshold, hysteresis=hysteresis,
+                                  reference_profile=reference_profile)
+    x = [stamp for interval in day.intervals for stamp in (interval.start_at, interval.end_at)]
+    curve = [interval.price_eur_per_mwh for interval in day.intervals for _ in range(2)]
     lines = []
     if analysis.reference_prices is not None:
-        lines.append(LineSeries(x, [*analysis.reference_prices, analysis.reference_prices[-1]],
+        lines.append(LineSeries(x, [price for price in analysis.reference_prices for _ in range(2)],
                                 label="Reference profile", role="muted"))
     lines.append(LineSeries(x, curve, label=str(day.day), linewidth=2.5))
-    highlights = []
-    for index, high in enumerate(analysis.high_mask):
-        if high:
-            label = f"> €{Decimal(str(threshold)):g}/MWh (actual)" if not highlights else None
-            highlights.append(HighlightSegment(x[index], x[index + 1], curve[index], curve[index + 1],
-                                               label=label, role="error"))
+    if analysis.high_price_ranges:
+        trigger = Decimal(str(threshold))
+        lower = trigger - Decimal(str(hysteresis))
+        label = f"> €{trigger:g} peak · > €{lower:g} range (€/MWh)"
+        high_curve = [interval.price_eur_per_mwh if high else None
+                      for interval, high in zip(day.intervals, analysis.high_mask) for _ in range(2)]
+        lines.append(LineSeries(x, high_curve, label=label, role="error", linewidth=2.8))
     zone = ZoneInfo(day.timezone)
-    tick_times = [instant for instant in x[:-1]
+    tick_times = [instant for instant in x[::2]
                   if instant.astimezone(zone).minute == 0 and instant.astimezone(zone).hour % 2 == 0]
     local_ticks = [instant.astimezone(zone) for instant in tick_times]
     counts = Counter(local.strftime("%H:%M") for local in local_ticks)
@@ -39,6 +46,7 @@ def create_price_chart(day: DayAheadPriceDay, *, threshold: Decimal = DEFAULT_TH
                    ("\n" + local.strftime("%z")[:3] if counts[local.strftime("%H:%M")] > 1 else "")
                    for local in local_ticks]
     return build_line_chart(lines, title="Day-ahead electricity prices",
-                            subtitle=f"{day.day} · {day.market} · {day.timezone} · Smoothed curve",
-                            ylabel="€/MWh", figsize=(12, 5), highlights=highlights,
-                            xticks=tick_times, xticklabels=tick_labels, xlim=(x[0], x[-1]))
+                            subtitle=f"{day.day} · {day.market} · {day.timezone} · Actual interval prices",
+                            ylabel="€/MWh", figsize=(12, 5),
+                            xticks=[*tick_times, x[-1]], xticklabels=[*tick_labels, "24:00"],
+                            xlim=(x[0], x[-1]))

@@ -12,6 +12,7 @@ from .database import initialize_schema
 from .database.connection import DatabaseConfigurationError
 from .filling import FillError
 from .prices import DayAheadPriceRepository
+from .prices.analysis import DEFAULT_HYSTERESIS, DEFAULT_THRESHOLD
 from .prices.ingestion import DayAheadPriceIngestionService
 from .prices.entsoe import PriceAPIError
 from .usage.ingestion import UsageIngestionService
@@ -36,6 +37,13 @@ def _threshold(value):
     return threshold
 
 
+def _hysteresis(value):
+    margin = _threshold(value)
+    if margin < 0:
+        raise argparse.ArgumentTypeError("Hysteresis must be nonnegative.")
+    return margin
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Manage home electricity usage and day-ahead market prices.")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -48,7 +56,9 @@ def main(argv=None) -> int:
     chart.add_argument("domain", choices=("prices",))
     chart.add_argument("date", type=date.fromisoformat)
     chart.add_argument("--output", required=True, type=Path, help="PNG output path")
-    chart.add_argument("--threshold", type=_threshold, default=Decimal("300"), help="Actual price threshold in EUR/MWh")
+    chart.add_argument("--threshold", type=_threshold, default=DEFAULT_THRESHOLD, help="Actual price trigger in EUR/MWh")
+    chart.add_argument("--hysteresis", type=_hysteresis, default=DEFAULT_HYSTERESIS,
+                       help="Expand ranges above trigger minus this EUR/MWh margin (default: 25; 0 disables expansion)")
     investigate = commands.add_parser("investigate", help="Export consumption-only EV hypotheses and graphs")
     investigate.add_argument("domain", choices=("ev",))
     investigate.add_argument("date", type=date.fromisoformat)
@@ -90,7 +100,7 @@ def main(argv=None) -> int:
             day = DayAheadPriceRepository().load_day(args.date)
             if day is None:
                 raise ValueError(f"No stored prices for {args.date}. Run home-energy fill prices {args.date} first.")
-            figure = create_price_chart(day, threshold=args.threshold)
+            figure = create_price_chart(day, threshold=args.threshold, hysteresis=args.hysteresis)
             try:
                 save_png(figure, args.output)
             finally:

@@ -6,12 +6,11 @@ from decimal import Decimal
 from typing import Sequence
 from zoneinfo import ZoneInfo
 
-from scipy.signal import savgol_filter
-
 from .models import DayAheadPriceDay
 
 
 DEFAULT_THRESHOLD = Decimal("300")
+DEFAULT_HYSTERESIS = Decimal("25")
 # User-supplied comparison profile, not a statistical estimate computed here.
 # Its historical period and provenance are unknown. Slots are local 00:00–23:45.
 SUPPLIED_REFERENCE_PROFILE = (
@@ -38,31 +37,33 @@ class PriceRange:
 
 @dataclass(frozen=True)
 class PriceAnalysis:
-    smoothed_prices: tuple[float, ...]
     reference_prices: tuple[float, ...] | None
     high_mask: tuple[bool, ...]
     high_price_ranges: tuple[PriceRange, ...]
 
 
-def smooth_series(values: Sequence) -> tuple[float, ...]:
-    values = tuple(float(value) for value in values)
-    window = min(7, len(values))
-    if window % 2 == 0:
-        window -= 1
-    if window < 3:
-        return values
-    return tuple(float(value) for value in savgol_filter(values, window_length=window, polyorder=2))
+def validate_price_thresholds(threshold, hysteresis) -> tuple[Decimal, Decimal]:
+    """Normalize the trigger and nonnegative range-expansion margin."""
+    values = []
+    for name, value in (("Threshold", threshold), ("Hysteresis", hysteresis)):
+        try:
+            value = Decimal(str(value))
+        except ArithmeticError:
+            raise ValueError(f"{name} must be a finite number in EUR/MWh.") from None
+        if not value.is_finite():
+            raise ValueError(f"{name} must be a finite number in EUR/MWh.")
+        values.append(value)
+    if values[1] < 0:
+        raise ValueError("Hysteresis must be nonnegative.")
+    return values[0], values[1]
 
 
 def analyse_prices(day: DayAheadPriceDay, *, threshold: Decimal = DEFAULT_THRESHOLD,
+                   hysteresis: Decimal = DEFAULT_HYSTERESIS,
                    reference_profile: Sequence | None = SUPPLIED_REFERENCE_PROFILE) -> PriceAnalysis:
+    """Flag runs above threshold minus margin that contain a price above threshold."""
     day.validate()
-    try:
-        threshold = Decimal(str(threshold))
-    except ArithmeticError:
-        raise ValueError("Threshold must be a finite number in EUR/MWh.") from None
-    if not threshold.is_finite():
-        raise ValueError("Threshold must be a finite number in EUR/MWh.")
+    threshold, hysteresis = validate_price_thresholds(threshold, hysteresis)
     reference = None
     if reference_profile is not None:
         if len(reference_profile) != 96:
@@ -83,14 +84,19 @@ def analyse_prices(day: DayAheadPriceDay, *, threshold: Decimal = DEFAULT_THRESH
                 cursor += timedelta(minutes=15)
             aligned.append(float(sum(slots) / len(slots)))
         reference = tuple(aligned)
-    high_mask = tuple(interval.price_eur_per_mwh > threshold for interval in day.intervals)
+    lower = threshold - hysteresis
+    high_mask = [False] * len(day.intervals)
     ranges = []
-    for interval, high in zip(day.intervals, high_mask):
-        if not high:
-            continue
-        if ranges and ranges[-1].end_at == interval.start_at:
-            ranges[-1] = PriceRange(ranges[-1].start_at, interval.end_at)
-        else:
-            ranges.append(PriceRange(interval.start_at, interval.end_at))
-    return PriceAnalysis(smooth_series([i.price_eur_per_mwh for i in day.intervals]),
-                         reference, high_mask, tuple(ranges))
+    start, triggered = None, False
+    # A sentinel closes a run at the requested day's final interval.
+    for index in range(len(day.intervals) + 1):
+        if index < len(day.intervals) and day.intervals[index].price_eur_per_mwh > lower:
+            if start is None:
+                start = index
+            triggered |= day.intervals[index].price_eur_per_mwh > threshold
+        elif start is not None:
+            if triggered:
+                high_mask[start:index] = [True] * (index - start)
+                ranges.append(PriceRange(day.intervals[start].start_at, day.intervals[index - 1].end_at))
+            start, triggered = None, False
+    return PriceAnalysis(reference, tuple(high_mask), tuple(ranges))

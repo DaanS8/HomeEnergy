@@ -6,6 +6,10 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from unittest.mock import patch
 
+import numpy as np
+from matplotlib.dates import date2num
+
+from home_energy.charts import COLORS, render_png
 from home_energy.filling import FillError
 from home_energy.prices.analysis import PriceRange
 from home_energy.prices.entsoe import InvalidPriceDataError
@@ -27,6 +31,36 @@ class PriceReportTests(unittest.TestCase):
             self.repository, client_factory=lambda: self.provider, now=lambda: NOW,
         )
         self.service = DayAheadReportService(ingestion_service=ingestion)
+
+    def test_custom_margin_keeps_chart_ranges_and_warning_text_in_agreement(self):
+        day = price_day(DAY, "0")
+        for index, price in enumerate((275, 285, 310, 295, 275), start=15):
+            day.intervals[index] = replace(day.intervals[index], price_eur_per_mwh=Decimal(price))
+        self.repository.save_day(day)
+        red_intervals = set()
+
+        def capture_chart(create):
+            figure = create()
+            try:
+                red = next(line for line in figure.axes[0].lines if line.get_color() == COLORS["error"])
+                path = red.get_path().vertices
+                for index, interval in enumerate(day.intervals):
+                    midpoint = date2num(interval.start_at + (interval.end_at - interval.start_at) / 2)
+                    if np.isfinite(np.interp(midpoint, path[:, 0], path[:, 1])):
+                        red_intervals.add(index)
+                return render_png(lambda: figure)
+            finally:
+                figure.clear()
+
+        with patch("home_energy.prices.report.render_png", side_effect=capture_chart):
+            report = self.service(DAY, hysteresis=Decimal("10.000"))
+        self.assertEqual(str(report.hysteresis), "10.000")
+        self.assertEqual(red_intervals, {17, 18})
+        self.assertEqual(report.high_price_ranges,
+                         (PriceRange(day.intervals[17].start_at, day.intervals[18].end_at),))
+        self.assertEqual(report.warning, "van 04:15 tot 04:45")
+        assert_png(self, report.png)
+        self.assertEqual(self.provider.opened, 0)
 
     def test_actual_spike_produces_warning_and_cached_replay_needs_no_provider(self):
         day = price_day(DAY, "100")
@@ -71,6 +105,9 @@ class PriceReportTests(unittest.TestCase):
         for day, threshold in ((date(9999, 1, 1), 300), (DAY, "NaN"), (DAY, True)):
             with self.subTest(day=day, threshold=threshold), self.assertRaises(ReportRequestError):
                 self.service(day, threshold)
+        for margin in ("NaN", "Infinity", "invalid", "-0.001", None, True):
+            with self.subTest(margin=margin), self.assertRaises(ReportRequestError):
+                self.service(DAY, hysteresis=margin)
         self.assertEqual(self.provider.opened, 0)
         self.assertEqual(self.repository.days, {})
 

@@ -29,7 +29,8 @@ def create_ev_usage_chart(report: DailyUsage) -> Figure:
         title="Energy consumption and EV charging",
         subtitle=f"{report.day} · Europe/Brussels · Total {report.total_kwh:.2f} kWh"
                  f" · EV {report.ev_total_kwh:.2f} kWh · {detail}",
-        ylabel="kW", figsize=(12, 5), xticks=ticks, xticklabels=labels, xlim=(x[0], x[-1]),
+        ylabel="kW", figsize=(12, 5), xticks=[*ticks, x[-1]],
+        xticklabels=[*labels, "24:00"], xlim=(x[0], x[-1]),
     )
     ax = figure.axes[0]
     ax.fill_between(x, 0, [float(power) for power in ev], color=COLORS["accent"], alpha=0.18)

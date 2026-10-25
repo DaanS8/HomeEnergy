@@ -48,6 +48,7 @@ class ApiTests(unittest.TestCase):
                 body = response.json()
                 self.assertEqual(body["status"], "success")
                 self.assertEqual(body["threshold_eur_per_mwh"], expected)
+                self.assertEqual(body["hysteresis_eur_per_mwh"], "25")
                 assert_png(self, base64.b64decode(body["image"], validate=True))
                 self.assertEqual(body["image_mime_type"], "image/png")
                 self.assertEqual(body["image_filename"], "day-ahead-2000-01-01.png")
@@ -59,7 +60,8 @@ class ApiTests(unittest.TestCase):
         for index in (17, 18):
             day.intervals[index] = replace(day.intervals[index], price_eur_per_mwh=Decimal("-10.249"))
         self.repository.days[DAY] = day
-        response = self.client.post(REPORT_PATH, json={"date": str(DAY), "threshold_eur_per_mwh": "-10.25"})
+        response = self.client.post(REPORT_PATH, json={"date": str(DAY), "threshold_eur_per_mwh": "-10.25",
+                                                     "hysteresis_eur_per_mwh": "0"})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "warning")
         self.assertEqual(response.json()["high_price_ranges"][0]["start_at"], "2000-01-01T17:00:00+01:00")
@@ -67,12 +69,38 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.json()["threshold_eur_per_mwh"], "-10.25")
         self.assertEqual(response.json()["warning"], "van 17:00 tot 19:00")
 
+    def test_default_custom_and_zero_margins_return_expanded_ranges_and_exact_settings(self):
+        day = self.repository.load_day(DAY)
+        for index, value in enumerate((275, 280, 310, 290, 305, 276, 275, 299, 300), start=15):
+            day.intervals[index] = replace(day.intervals[index], price_eur_per_mwh=Decimal(value))
+        self.repository.days[DAY] = day
+        for margin, spans in ((None, [(16, 21)]), ("20.000", [(17, 20)]), ("0", [(17, 18), (19, 20)])):
+            with self.subTest(margin=margin):
+                request = {"date": str(DAY)}
+                if margin is not None:
+                    request["hysteresis_eur_per_mwh"] = margin
+                response = self.client.post(REPORT_PATH, json=request)
+                self.assertEqual(response.status_code, 200)
+                body = response.json()
+                self.assertEqual(body["status"], "warning")
+                self.assertEqual(body["hysteresis_eur_per_mwh"], "25" if margin is None else margin)
+                self.assertEqual(body["high_price_ranges"], [
+                    {"start_at": f"2000-01-01T{first:02}:00:00+01:00",
+                     "end_at": f"2000-01-01T{end:02}:00:00+01:00"} for first, end in spans
+                ])
+                self.assertEqual(body["warning"], " en ".join(
+                    f"van {first:02}:00 tot {end:02}:00" for first, end in spans
+                ))
+                assert_png(self, base64.b64decode(body["image"], validate=True))
+
     def test_bad_input_never_invokes_the_service_and_has_the_documented_envelope(self):
         bodies = [{}, {"date": "tomorrow"}, {"date": "2000-02-30"}, {"date": "9999-01-01"},
                   {"date": "2000-01-01T00:00:00Z"}, {"date": 946684800},
                   {"date": str(DAY), "typo_threshold": "300"},
                   *[{"date": str(DAY), "threshold_eur_per_mwh": v}
-                    for v in ("NaN", "Infinity", "abc", None, True)]]
+                    for v in ("NaN", "Infinity", "abc", None, True)],
+                  *[{"date": str(DAY), "hysteresis_eur_per_mwh": v}
+                    for v in ("NaN", "Infinity", "-0.001", "abc", None, True)]]
         for body in bodies:
             with self.subTest(body=body):
                 response = self.client.post(REPORT_PATH, json=body)
@@ -129,8 +157,10 @@ class ApiTests(unittest.TestCase):
         request_schema = document["components"]["schemas"]["DayAheadReportRequest"]
         self.assertEqual(request_schema["required"], ["date"])
         self.assertFalse(request_schema["additionalProperties"])
+        self.assertEqual(str(request_schema["properties"]["hysteresis_eur_per_mwh"]["default"]), "25")
         response_schema = document["components"]["schemas"]["DayAheadReportResponse"]
         self.assertEqual(response_schema["properties"]["threshold_eur_per_mwh"]["type"], "string")
+        self.assertEqual(response_schema["properties"]["hysteresis_eur_per_mwh"]["type"], "string")
         self.assertEqual(response_schema["properties"]["image"]["contentEncoding"], "base64")
         self.assertTrue(response_schema["examples"])
         self.assertEqual(self.client.get("/docs").status_code, 200)

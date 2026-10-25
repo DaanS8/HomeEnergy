@@ -2,11 +2,12 @@
 
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from ..charts import render_png
-from .analysis import DEFAULT_THRESHOLD, PriceRange, analyse_prices
+from .analysis import (DEFAULT_HYSTERESIS, DEFAULT_THRESHOLD, PriceRange, analyse_prices,
+                       validate_price_thresholds)
 from .chart import create_price_chart
 from .ingestion import DayAheadPriceIngestionService, validate_price_range
 from .repository import DayAheadPriceRepository
@@ -22,6 +23,7 @@ class PriceReport:
     market: str
     timezone: str
     threshold: Decimal
+    hysteresis: Decimal
     fetched_at: datetime
     high_price_ranges: tuple[PriceRange, ...]
     warning: str | None
@@ -49,8 +51,9 @@ def warning_summary(ranges: tuple[PriceRange, ...], day: date, timezone: str) ->
     return ", ".join(labels[:-1]) + " en " + labels[-1]
 
 
-def _render_png(day, threshold: Decimal) -> bytes:
-    return render_png(lambda: create_price_chart(day, threshold=threshold))
+def _render_png(day, threshold: Decimal, hysteresis: Decimal, analysis) -> bytes:
+    return render_png(lambda: create_price_chart(day, threshold=threshold, hysteresis=hysteresis,
+                                                analysis=analysis))
 
 
 class DayAheadReportService:
@@ -68,26 +71,23 @@ class DayAheadReportService:
             repository, now=self.now,
         )
 
-    def __call__(self, selected_date: date, threshold: Decimal = DEFAULT_THRESHOLD) -> PriceReport:
+    def __call__(self, selected_date: date, threshold: Decimal = DEFAULT_THRESHOLD, *,
+                 hysteresis: Decimal = DEFAULT_HYSTERESIS) -> PriceReport:
         try:
             validate_price_range(selected_date, now=self.now())
         except ValueError as exc:
             raise ReportRequestError(str(exc)) from None
         try:
-            if isinstance(threshold, bool):
-                raise ValueError
-            threshold = Decimal(str(threshold))
-            if not threshold.is_finite():
-                raise ValueError
-        except (InvalidOperation, ValueError):
-            raise ReportRequestError("Threshold must be a finite number in EUR/MWh.") from None
+            threshold, hysteresis = validate_price_thresholds(threshold, hysteresis)
+        except ValueError as exc:
+            raise ReportRequestError(str(exc)) from None
 
         self.ingestion_service.fill(selected_date)
         day = self.repository.load_day(selected_date)
         if day is None:
             raise RuntimeError("A completed price fill did not produce a stored day.")
-        analysis = analyse_prices(day, threshold=threshold)
-        png = _render_png(day, threshold)
-        return PriceReport(day.day, day.market, day.timezone, threshold, day.fetched_at,
+        analysis = analyse_prices(day, threshold=threshold, hysteresis=hysteresis)
+        png = _render_png(day, threshold, hysteresis, analysis)
+        return PriceReport(day.day, day.market, day.timezone, threshold, hysteresis, day.fetched_at,
                            analysis.high_price_ranges,
                            warning_summary(analysis.high_price_ranges, day.day, day.timezone), png)

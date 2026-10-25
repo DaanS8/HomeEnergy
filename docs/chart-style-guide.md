@@ -144,9 +144,12 @@ Figure, axes, and saved backgrounds use navy. Text and grid use the palette abov
 
 ## Established price-chart baseline
 
-The supplied price script is the baseline for price charts: blue smoothed prices,
-slate comparison profile, and coral expensive-price segments. This preserves its
-specific highlighting convention. Generic charts default meaningful highlights to mint;
-other warnings use amber. Thresholds are evaluated against raw prices, and negative
-prices and DST days remain visible. The reference profile is supplied context with
-unknown historical provenance.
+Price charts show actual interval prices as blue steps, a slate comparison profile,
+and coral steps for expensive-price regions. A region is a contiguous run strictly
+above the trigger minus the hysteresis margin containing at least one price strictly
+above the trigger. Defaults are 300 EUR/MWh and a 25 EUR/MWh margin; regions expand
+in both directions and match the API ranges and warning text. Zero margin restores
+strict threshold ranges. Generic charts default meaningful highlights to mint;
+other warnings use amber. Negative prices, DST days, and the final 24:00 tick remain
+visible. The reference profile is supplied context with unknown historical provenance;
+no curve smoothing is applied to chart data.

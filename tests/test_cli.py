@@ -100,9 +100,12 @@ class CliTests(unittest.TestCase):
         self.assertIn("home-energy fill prices 2000-01-01", error.getvalue())
 
     def test_invalid_threshold_fails_in_argument_parsing_without_traceback_or_database(self):
-        for value in ("invalid", "NaN", "Infinity"):
-            with patch("home_energy.cli.DayAheadPriceRepository") as repository, redirect_stderr(io.StringIO()), \
-                    self.assertRaises(SystemExit) as error:
-                main(["chart", "prices", "2026-10-10", "--output", "prices.png", "--threshold", value])
-            self.assertEqual(error.exception.code, 2)
-            repository.assert_not_called()
+        for option, values in (("--threshold", ("invalid", "NaN", "Infinity")),
+                               ("--hysteresis", ("invalid", "NaN", "Infinity", "-0.001"))):
+            for value in values:
+                with self.subTest(option=option, value=value), \
+                        patch("home_energy.cli.DayAheadPriceRepository") as repository, \
+                        redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+                    main(["chart", "prices", "2026-10-10", "--output", "prices.png", option, value])
+                self.assertEqual(error.exception.code, 2)
+                repository.assert_not_called()

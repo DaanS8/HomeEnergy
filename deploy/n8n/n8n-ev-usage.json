@@ -54,21 +54,15 @@
               "type": "string"
             },
             {
-              "id": "date-offset",
-              "name": "date_offset_days",
-              "value": -2,
-              "type": "number"
+              "id": "start-date",
+              "name": "start_date",
+              "value": "2026-09-01",
+              "type": "string"
             },
             {
               "id": "guild",
               "name": "guild_id",
               "value": "1532853070281707561",
-              "type": "string"
-            },
-            {
-              "id": "admin-channel",
-              "name": "admin_channel_id",
-              "value": "1532856135546044607",
               "type": "string"
             },
             {
@@ -79,13 +73,62 @@
             }
           ]
         },
+        "includeOtherFields": true,
         "options": {}
       },
       "position": [
-        240,
+        480,
         100
       ],
-      "notes": "Leave test_date blank for the scheduled date. For testing, enter YYYY-MM-DD and run manually. Clear test_date before enabling the schedule. EV dates must be at least two days ago. Both image and failure messages go to admin_channel_id.",
+      "notes": "Leave test_date blank: manual runs publish every day from start_date through two days ago in Brussels; the daily schedule publishes only two days ago. Set test_date to YYYY-MM-DD for a single report, then clear it before enabling the schedule. Configure the destination directly in both Discord nodes. Running the backfill again republishes the selected dates.",
+      "notesInFlow": true
+    },
+    {
+      "id": "b253c7de-e791-4e0d-819f-6dc9c31038c4",
+      "name": "Backfill mode",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "return { json: { ...$json, backfill: true } };"
+      },
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "id": "025da9b4-9b1d-4115-9aef-e77024a5cfc8",
+      "name": "Report dates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const zone = 'Europe/Brussels';\nconst end = $now.setZone(zone).startOf('day').minus({ days: 2 }).toISODate();\nreturn $input.all().flatMap((item, inputIndex) => {\n  const context = item.json;\n  const override = String(context.test_date ?? '').trim();\n  const first = override || (context.backfill === true ? String(context.start_date ?? '').trim() : end);\n  let cursor = DateTime.fromISO(first, { zone }).startOf('day');\n  if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(first) || !cursor.isValid) {\n    throw new Error('Use a valid start_date or test_date in YYYY-MM-DD format.');\n  }\n  if (override && first > end) {\n    throw new Error('EV dates must be at least two days ago in Europe/Brussels.');\n  }\n  const last = override || end;\n  const dates = [];\n  while (cursor.toISODate() <= last) {\n    dates.push({ json: { ...context, date: cursor.toISODate(), attempt: 0 }, pairedItem: { item: inputIndex } });\n    cursor = cursor.plus({ days: 1 });\n  }\n  return dates;\n});"
+      },
+      "position": [
+        720,
+        100
+      ],
+      "notes": "Snapshot the inclusive date range once per execution. Dates advance by Brussels calendar days, including DST changes.",
+      "notesInFlow": true
+    },
+    {
+      "id": "a8f1bda9-6f69-4c23-a6c1-cfe0b7cb89ab",
+      "name": "Loop over days",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "parameters": {
+        "batchSize": 1,
+        "options": {
+          "reset": false
+        }
+      },
+      "position": [
+        960,
+        100
+      ],
+      "notes": "Publish one day at a time. Advance only after Discord confirms delivery; exhausted report retries alert and stop the backfill.",
       "notesInFlow": true
     },
     {
@@ -95,10 +138,10 @@
       "typeVersion": 2,
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const attempt = ($json.attempt ?? 0) + 1;\nconst override = String($json.test_date ?? '').trim();\nconst date = $json.date ?? (override || $now.setZone('Europe/Brussels').plus({ days: $json.date_offset_days }).toISODate());\nif (!/^\\d{4}-\\d{2}-\\d{2}$/.test(date) || !DateTime.fromISO(date, { zone: 'Europe/Brussels' }).isValid) {\n  throw new Error('Use a valid test_date in YYYY-MM-DD format.');\n}\nreturn { json: { ...$json, date, attempt } };"
+        "jsCode": "const attempt = ($json.attempt ?? 0) + 1;\nconst date = $json.date;\nif (!/^\\d{4}-\\d{2}-\\d{2}$/.test(date) || !DateTime.fromISO(date, { zone: 'Europe/Brussels' }).isValid) {\n  throw new Error('Expected a valid report date in YYYY-MM-DD format.');\n}\nreturn { json: { ...$json, date, attempt } };"
       },
       "position": [
-        480,
+        1200,
         100
       ]
     },
@@ -126,7 +169,7 @@
         "authentication": "none"
       },
       "position": [
-        720,
+        1440,
         100
       ],
       "onError": "continueRegularOutput"
@@ -141,7 +184,7 @@
         "jsCode": "const context = $('Request context').item.json;\nconst statusCode = $json.statusCode ?? 0;\nconst payload = $json.body;\nconst validBody = payload && typeof payload === 'object' && !Array.isArray(payload);\nconst body = validBody ? payload : {\n  status: 'error',\n  code: statusCode === 0 ? 'transport_error' : 'invalid_response',\n  error: statusCode === 0 ? 'Home Energy could not be reached.' : 'Home Energy returned an invalid response.',\n  retryable: statusCode === 0 || statusCode >= 500,\n};\nconst complete = statusCode === 200 && (body.status === 'complete')\n  && body.date === context.date && body.image_mime_type === 'image/png'\n  && typeof body.image_filename === 'string' && body.image_filename.endsWith('.png')\n  && typeof body.image === 'string' && body.image.startsWith('iVBORw0KGgo');\nconst error = `${body.code ?? 'invalid_response'}: ${body.error ?? 'Home Energy did not return a completed PNG report.'} (date ${context.date}, attempt ${context.attempt})`;\nreturn { json: { ...context, body, statusCode, complete, error,\n  can_retry: !complete && body.retryable === true && context.attempt < 6 } };"
       },
       "position": [
-        960,
+        1680,
         100
       ]
     },
@@ -175,7 +218,7 @@
         "options": {}
       },
       "position": [
-        1200,
+        1920,
         100
       ]
     },
@@ -194,7 +237,7 @@
         }
       },
       "position": [
-        1440,
+        2160,
         0
       ]
     },
@@ -205,10 +248,10 @@
       "typeVersion": 2,
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const { image, ...report } = $('Evaluate response').item.json.body;\nconst { guild_id, admin_channel_id } = $('Request context').item.json;\nreturn { json: { ...report, guild_id, admin_channel_id }, binary: $binary };"
+        "jsCode": "const { image, ...report } = $('Evaluate response').item.json.body;\nconst { guild_id } = $('Request context').item.json;\nreturn { json: { ...report, guild_id }, binary: $binary };"
       },
       "position": [
-        1680,
+        2400,
         0
       ]
     },
@@ -242,7 +285,7 @@
         "options": {}
       },
       "position": [
-        1440,
+        2160,
         240
       ]
     },
@@ -256,7 +299,7 @@
         "unit": "minutes"
       },
       "position": [
-        1680,
+        2400,
         200
       ],
       "webhookId": "22aa73c2-05b8-434b-9d3a-bd1c135f7303"
@@ -270,7 +313,7 @@
         "errorMessage": "={{ $('Evaluate response').item.json.error }}"
       },
       "position": [
-        1920,
+        2640,
         400
       ]
     },
@@ -284,7 +327,7 @@
         },
         "channelId": {
           "__rl": true,
-          "value": "={{ $json.admin_channel_id }}",
+          "value": "1532856135546044607",
           "mode": "id"
         },
         "content": "=Energieverbruik en EV-laden {{ DateTime.fromISO($json.date).toFormat('dd-MM-yyyy') }}\nTotaal: {{ $json.total_kwh }} kWh · Geschat EV-verbruik: {{ $json.ev_total_kwh }} kWh\n{{ $json.ev_blocks.length ? $json.ev_blocks.length + ' EV-laadblok(ken) gedetecteerd.' : 'Geen EV-laadblok gedetecteerd.' }}",
@@ -304,7 +347,7 @@
       "type": "n8n-nodes-base.discord",
       "typeVersion": 2,
       "position": [
-        1920,
+        2640,
         -80
       ],
       "id": "8d492638-e8a4-41e9-8e0f-bc2e4e59b592",
@@ -327,7 +370,7 @@
         },
         "channelId": {
           "__rl": true,
-          "value": "={{ $json.admin_channel_id }}",
+          "value": "1532856135546044607",
           "mode": "id"
         },
         "content": "=Daily EV Usage - Admin failed.\n\n{{ $json.error }}",
@@ -337,7 +380,7 @@
       "type": "n8n-nodes-base.discord",
       "typeVersion": 2,
       "position": [
-        1680,
+        2400,
         400
       ],
       "id": "2286707c-2a45-4bd9-8f3c-e13e1683a610",
@@ -356,7 +399,7 @@
       "main": [
         [
           {
-            "node": "Settings",
+            "node": "Backfill mode",
             "type": "main",
             "index": 0
           }
@@ -367,7 +410,52 @@
       "main": [
         [
           {
+            "node": "Report dates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Backfill mode": {
+      "main": [
+        [
+          {
+            "node": "Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Report dates": {
+      "main": [
+        [
+          {
+            "node": "Loop over days",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop over days": {
+      "main": [
+        [],
+        [
+          {
             "node": "Request context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send image to admin": {
+      "main": [
+        [
+          {
+            "node": "Loop over days",
             "type": "main",
             "index": 0
           }
