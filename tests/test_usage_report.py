@@ -31,7 +31,7 @@ class UsageReportTests(unittest.TestCase):
         second = self.service(DAY)
         self.assertEqual(first.usage, second.usage)
         self.assertEqual(first.usage.total_kwh, Decimal("42.750"))
-        self.assertEqual(first.usage.ev_total_kwh, Decimal("1.0845"))
+        self.assertEqual(first.usage.ev_total_kwh, Decimal("1.0795"))
         self.assertEqual(len(first.usage.ev_blocks), 1)
         self.assertEqual(self.provider.requests, [DAY - timedelta(days=1), DAY, DAY + timedelta(days=1)])
         self.assertEqual(sorted(self.repository.days), self.provider.requests)
@@ -117,7 +117,7 @@ class UsageReportTests(unittest.TestCase):
         with patch.object(self.repository, "save_day", side_effect=competing_insert):
             report = self.service(DAY)
         self.assertEqual(report.usage.total_kwh, Decimal("99"))
-        self.assertEqual(report.usage.ev_total_kwh, Decimal("4.338"))
+        self.assertEqual(report.usage.ev_total_kwh, Decimal("4.318"))
         self.assertEqual(len(report.usage.ev_blocks), 1)
 
     def test_missing_committed_day_cannot_produce_a_completed_report(self):

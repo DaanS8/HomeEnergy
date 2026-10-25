@@ -39,10 +39,10 @@ class EVUsageReportTests(unittest.TestCase):
         self.assertEqual(body["image_mime_type"], "image/png")
         self.assertEqual(body["total_kwh"], "42.750")
         self.assertEqual(body["total_kwh_source"], "fusionsolar.totalUsePower")
-        self.assertEqual(body["ev_total_kwh"], "1.0845")
+        self.assertEqual(body["ev_total_kwh"], "1.0795")
         self.assertEqual(body["ev_blocks"][0]["end_at"], "2026-09-03T00:00:00+02:00")
         self.assertEqual(body["ev_model"]["minimum_minutes"], 120)
-        self.assertEqual(body["ev_model"]["power_kw"], "2.169")
+        self.assertEqual(body["ev_model"]["power_kw"], "2.159")
         self.assertEqual(body["ev_model"]["method"], "mean_clean_stop_drop")
         self.assertTrue(body["ev_model"]["version"])
         self.assertEqual(len(body["consumption"]), 288)
@@ -51,7 +51,7 @@ class EVUsageReportTests(unittest.TestCase):
             "power_kw": "0.2", "ev_power_kw": "0",
         })
         self.assertEqual(body["consumption"][-1]["power_kw"], "2.4")
-        self.assertEqual(body["consumption"][-1]["ev_power_kw"], "2.169")
+        self.assertEqual(body["consumption"][-1]["ev_power_kw"], "2.159")
         assert_png(self, base64.b64decode(body["image"], validate=True))
         self.assertEqual(self.provider.requests, [])
 

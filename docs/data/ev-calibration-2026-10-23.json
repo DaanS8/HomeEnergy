@@ -1,0 +1,185 @@
+{
+  "analysis_date": "2026-10-25",
+  "model_version": "clean-stops-2026-10-23-mean-v3",
+  "range_start": "2026-09-01",
+  "range_end": "2026-10-23",
+  "context_start": "2026-08-31",
+  "context_end": "2026-10-24",
+  "timezone": "Europe/Brussels",
+  "provenance": {
+    "previous_days": "Reused validated source export from the 2026-10-10 investigation through 2026-10-10.",
+    "additional_days": "Fetched complete FusionSolar snapshots for 2026-10-11 through 2026-10-24 on 2026-10-25; no database writes.",
+    "declared_source_unit": "kW",
+    "source_unit_verified": false,
+    "source_sha256": {
+      "days.json": "0ce97bb48624bb39ccdcf3c2e8ce41f9680cba7afd23f8dfd2b4ddf5369655ba",
+      "measurement_samples.csv": "fe1f7ec985c53397e5d88764a09e4826d13e3b56cba4bdacb9b238de49cd5ca3",
+      "daily_metrics.csv": "576ea30b7639ba0df84aa44fb5e48efad8bb6e6bf6eeb6d6cae8ec3de7be3ac8"
+    }
+  },
+  "calibration": {
+    "method": "mean_clean_stop_drop",
+    "parameters": {
+      "window_minutes": 10,
+      "guard_samples": 2,
+      "maximum_window_spread_kw": 0.2,
+      "bootstrap_repetitions": 5000,
+      "random_seed": 20261011,
+      "night_start_hour": 0,
+      "night_end_hour": 6,
+      "minimum_night_samples": 12,
+      "exclusion_margin_minutes": 30
+    },
+    "reference_candidates": 28,
+    "accepted_endings": 21,
+    "rejected_endings": 7,
+    "ev_kw": 2.159,
+    "mean_ev_kw": 2.1594761904761905,
+    "bootstrap_95pct_low_kw": 2.1233095238095236,
+    "bootstrap_95pct_high_kw": 2.194714880952381,
+    "window_sensitivity_low_kw": 2.1343970588235295,
+    "window_sensitivity_high_kw": 2.160815789473684,
+    "ending_std_kw": 0.08584819103954319,
+    "nighttime_accepted_endings": 20,
+    "nighttime_ev_kw": 2.1569,
+    "baseload_kw": 0.16970000000000002,
+    "eligible_nights": 37,
+    "baseload_bootstrap_95pct_low_kw": 0.1538,
+    "baseload_bootstrap_95pct_high_kw": 0.185,
+    "baseload_q05_kw": 0.159,
+    "baseload_q20_kw": 0.1884,
+    "earlier_accepted_endings": 17,
+    "later_accepted_endings": 4,
+    "earlier_fit_ev_kw": 2.168823529411765,
+    "later_ending_mae_kw": 0.07991176470588246,
+    "quality_sensitivity": [
+      {
+        "maximum_window_spread_kw": 0.1,
+        "accepted_endings": 20,
+        "mean_ev_kw": 2.1569
+      },
+      {
+        "maximum_window_spread_kw": 0.2,
+        "accepted_endings": 21,
+        "mean_ev_kw": 2.1594761904761905
+      },
+      {
+        "maximum_window_spread_kw": 0.3,
+        "accepted_endings": 22,
+        "mean_ev_kw": 2.152909090909091
+      }
+    ]
+  },
+  "window_sensitivity": [
+    {
+      "window_minutes": 10,
+      "guard_samples": 1,
+      "accepted_endings": 19,
+      "rejected_endings": 9,
+      "mean_ev_kw": 2.160815789473684,
+      "bootstrap_low_kw": 2.1281019736842106,
+      "bootstrap_high_kw": 2.1931625
+    },
+    {
+      "window_minutes": 10,
+      "guard_samples": 2,
+      "accepted_endings": 21,
+      "rejected_endings": 7,
+      "mean_ev_kw": 2.1594761904761905,
+      "bootstrap_low_kw": 2.123309523809524,
+      "bootstrap_high_kw": 2.194714880952381
+    },
+    {
+      "window_minutes": 15,
+      "guard_samples": 1,
+      "accepted_endings": 18,
+      "rejected_endings": 10,
+      "mean_ev_kw": 2.1501666666666663,
+      "bootstrap_low_kw": 2.115776851851852,
+      "bootstrap_high_kw": 2.186593981481481
+    },
+    {
+      "window_minutes": 15,
+      "guard_samples": 2,
+      "accepted_endings": 18,
+      "rejected_endings": 10,
+      "mean_ev_kw": 2.1514814814814818,
+      "bootstrap_low_kw": 2.1164990740740746,
+      "bootstrap_high_kw": 2.187241203703704
+    },
+    {
+      "window_minutes": 20,
+      "guard_samples": 1,
+      "accepted_endings": 17,
+      "rejected_endings": 11,
+      "mean_ev_kw": 2.1434117647058826,
+      "bootstrap_low_kw": 2.111145955882353,
+      "bootstrap_high_kw": 2.176970588235294
+    },
+    {
+      "window_minutes": 20,
+      "guard_samples": 2,
+      "accepted_endings": 17,
+      "rejected_endings": 11,
+      "mean_ev_kw": 2.134397058823529,
+      "bootstrap_low_kw": 2.106159926470588,
+      "bootstrap_high_kw": 2.1627073529411764
+    }
+  ],
+  "seed_threshold_sensitivity": [
+    {
+      "seed_threshold_kw": 2.0,
+      "candidates": 28,
+      "accepted": 22,
+      "mean_kw": 2.1599772727272732
+    },
+    {
+      "seed_threshold_kw": 2.1,
+      "candidates": 28,
+      "accepted": 21,
+      "mean_kw": 2.1594761904761905
+    },
+    {
+      "seed_threshold_kw": 2.13,
+      "candidates": 28,
+      "accepted": 21,
+      "mean_kw": 2.1594761904761905
+    },
+    {
+      "seed_threshold_kw": 2.159,
+      "candidates": 28,
+      "accepted": 21,
+      "mean_kw": 2.1594761904761905
+    },
+    {
+      "seed_threshold_kw": 2.2,
+      "candidates": 28,
+      "accepted": 21,
+      "mean_kw": 2.1594761904761905
+    }
+  ],
+  "comparison": {
+    "previous_power_kw": 2.169,
+    "previous_accepted_endings": 17,
+    "additional_candidates": 10,
+    "additional_accepted_endings": 4,
+    "additional_mean_kw": 2.11975,
+    "additional_bootstrap_95pct_low_kw": 2.054,
+    "additional_bootstrap_95pct_high_kw": 2.1942500000000003,
+    "leave_one_out_low_kw": 2.151075,
+    "leave_one_out_high_kw": 2.16685,
+    "same_range_previous_model_kwh": 513.33,
+    "same_range_previous_model_charging_hours": 236.66666666666666
+  },
+  "production": {
+    "power_kw": "2.159",
+    "minimum_minutes": 120,
+    "regions": 28,
+    "charging_hours": 236.74999999999994,
+    "estimated_ev_kwh": 511.14324999999997,
+    "missing_target_samples": 0,
+    "missing_required_context_samples": 0,
+    "verified_daily_reports": 53,
+    "verified_interval_count": 15264
+  }
+}

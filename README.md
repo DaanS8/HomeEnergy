@@ -24,7 +24,7 @@ For local Python development, start `docker compose up -d --wait db`, then run `
 | `/api/v1/reports/ev/daily` | `{"date":"2026-10-10"}` or `{}` | Consumption readings, EV blocks, totals and a base64 PNG with EV blocks overlaid |
 | `/api/v1/reports/day-ahead` | `{"date":"2026-10-12","threshold_eur_per_mwh":"300","hysteresis_eur_per_mwh":"25"}` | Price analysis, `success`/`warning`, warning text and a base64 PNG |
 
-Usage accepts dates **at least two days ago**; `{}` selects two days ago in Brussels. EV detection requires **two continuous hours above 2.169 kW**, using two hours of boundary context on each side. The EV power is the equal-weight mean of accepted clean-stop drops, rounded to 0.001 kW; see [how we estimate it](docs/ev-estimation.md). No baseload is subtracted. The requested day and both adjacent days must have finished. Missing days are fetched once and stored only when every consumption interval and the daily total are available; stored days are immutable and reused. Successful reports always return `status: "complete"`. Yesterday and today are rejected with 422; incomplete consumption or required context returns 502.
+Usage accepts dates **at least two days ago**; `{}` selects two days ago in Brussels. EV detection requires **two continuous hours above 2.159 kW**, using two hours of boundary context on each side. The EV power is the equal-weight mean of accepted clean-stop drops, rounded to 0.001 kW; see [how we estimate it](docs/ev-estimation.md). No baseload is subtracted. The requested day and both adjacent days must have finished. Missing days are fetched once and stored only when every consumption interval and the daily total are available; stored days are immutable and reused. Successful reports always return `status: "complete"`. Yesterday and today are rejected with 422; incomplete consumption or required context returns 502.
 
 Usage returns Decimal powers/energies as strings and timestamps with Brussels offsets. The daily total comes from FusionSolar's `totalUsePower`; it is separate from integrating the sampled curve. See [EV estimation](docs/ev-estimation.md) for calibration evidence.
 
@@ -39,7 +39,7 @@ uv run home-energy fill usage 2026-10-10
 uv run home-energy fill prices 2026-10-08 --end-date 2026-10-10
 uv run home-energy chart prices 2026-10-10 --output outputs/prices.png
 uv run home-energy chart prices 2026-10-10 --output outputs/prices-strict.png --threshold 300 --hysteresis 0
-uv run --locked home-energy investigate ev 2026-09-01 --end-date 2026-10-10 --fetch --output outputs/ev-investigation-2026-09-01_2026-10-10
+uv run --locked home-energy investigate ev 2026-09-01 --end-date 2026-10-23 --fetch --output outputs/ev-investigation-2026-09-01_2026-10-23
 ```
 
 Usage fills accept past days and reject incomplete consumption or missing daily totals before storage. Repeated fills skip stored dates; price charts read stored data. The EV investigation exports real-data graphs, CSV tables, a PDF and an HTML index. Investigation dates must be at least two days ago; both adjacent context days are stored in the database. Omit `--fetch` to reuse stored data.

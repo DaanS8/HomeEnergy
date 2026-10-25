@@ -13,13 +13,13 @@ from usage_helpers import DAY, NOW, ZONE, complete_source_days as days
 class DailyDetectionTests(unittest.TestCase):
     def test_two_hours_and_strict_power_threshold_with_no_baseload_subtraction(self):
         data = days(loads=[("2026-09-02 08:00", "2026-09-02 09:55", 2.4),
-                           ("2026-09-02 10:00", "2026-09-02 12:00", 2.169),
+                           ("2026-09-02 10:00", "2026-09-02 12:00", 2.159),
                            ("2026-09-02 14:00", "2026-09-02 16:00", 2.4)])
         report = analyse_daily_usage(data, DAY, now=NOW)
         self.assertEqual(len(report.consumption), 288)
         self.assertEqual(len(report.ev_blocks), 1)
-        self.assertEqual(report.ev_blocks[0].power_kw, Decimal("2.169"))
-        self.assertEqual(report.ev_total_kwh, Decimal("4.338"))
+        self.assertEqual(report.ev_blocks[0].power_kw, Decimal("2.159"))
+        self.assertEqual(report.ev_total_kwh, Decimal("4.318"))
         self.assertEqual(report.total_kwh, Decimal("42.750"))
         self.assertTrue(all(s.ev_power_kw <= s.power_kw for s in report.consumption))
 
@@ -27,10 +27,10 @@ class DailyDetectionTests(unittest.TestCase):
         data = days(count=4, loads=[("2026-09-01 22:30", "2026-09-02 00:30", 2.4),
                                     ("2026-09-02 23:30", "2026-09-03 01:30", 2.4)])
         report = analyse_daily_usage(data, DAY, now=NOW)
-        self.assertEqual([b.energy_kwh for b in report.ev_blocks], [Decimal("1.0845")] * 2)
+        self.assertEqual([b.energy_kwh for b in report.ev_blocks], [Decimal("1.0795")] * 2)
         self.assertEqual(report.ev_total_kwh, EV_POWER_KW)
         following = analyse_daily_usage(data[1:], DAY + timedelta(days=1), now=NOW + timedelta(days=1))
-        self.assertEqual(following.ev_total_kwh + report.ev_blocks[1].energy_kwh, Decimal("4.338"))
+        self.assertEqual(following.ev_total_kwh + report.ev_blocks[1].energy_kwh, Decimal("4.318"))
 
     def test_interruptions_split_regions_but_missing_readings_fail(self):
         for mode in ("dip", "null", "absent"):
@@ -85,7 +85,7 @@ class DailyDetectionTests(unittest.TestCase):
                 sample.value, sample.original_value = Decimal("2.4"), "2.4"
         report = analyse_daily_usage(data, selected, now=datetime(2026, 10, 27, tzinfo=ZONE))
         self.assertEqual(len(report.consumption), 300)
-        self.assertEqual(report.ev_total_kwh, Decimal("4.338"))
+        self.assertEqual(report.ev_total_kwh, Decimal("4.318"))
         self.assertEqual(report.ev_blocks[0].start_at.astimezone(ZONE).hour, 1)
         self.assertEqual(report.ev_blocks[0].end_at.astimezone(ZONE).hour, 2)
 
@@ -110,7 +110,7 @@ class DailyDetectionTests(unittest.TestCase):
         tomorrow_noon = next(s for s in data[2].samples if s.measurement == "usePower" and s.sample_index == 144)
         tomorrow_noon.unit = "kWh"
         report = analyse_daily_usage(data, DAY, now=NOW)
-        self.assertEqual(report.ev_total_kwh, Decimal("4.338"))
+        self.assertEqual(report.ev_total_kwh, Decimal("4.318"))
 
     def test_ambiguous_unused_dst_hour_does_not_reject_the_following_day(self):
         selected = DAY.replace(month=10, day=26)

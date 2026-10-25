@@ -8,11 +8,11 @@ from .models import EVBlock
 
 
 # Equal-weight mean of accepted clean-stop drops, rounded to 0.001 kW.
-# Frozen calibration; see docs/ev-estimation.md.
-EV_POWER_KW = Decimal("2.169")
+# 21 accepted stops through the 2026-10-23 investigation; see docs/ev-estimation.md.
+EV_POWER_KW = Decimal("2.159")
 MINIMUM_EV_DURATION = timedelta(hours=2)
 SAMPLE_INTERVAL = timedelta(minutes=5)
-MODEL_VERSION = "clean-stops-2026-10-10-mean-v2"
+MODEL_VERSION = "clean-stops-2026-10-23-mean-v3"
 
 
 def find_regions(readings: Iterable[tuple[datetime, Decimal | float | None]], *,

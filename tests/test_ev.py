@@ -14,7 +14,7 @@ STEP = timedelta(minutes=5)
 class RegionTests(unittest.TestCase):
     def test_exact_duration_and_strict_threshold(self):
         for count, power, expected in ((24, Decimal("2.4"), [(START, START + timedelta(hours=2))]),
-                                       (23, Decimal("2.4"), []), (24, Decimal("2.169"), [])):
+                                       (23, Decimal("2.4"), []), (24, Decimal("2.159"), [])):
             with self.subTest(count=count, power=power):
                 self.assertEqual(find_regions([(START + n * STEP, power) for n in range(count)]), expected)
 
